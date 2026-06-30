@@ -241,40 +241,33 @@ When a gate FAIL triggers repair, the dispatch loop is identical but with these 
 | Max retries | N/A (determined by gate) | Wave gate: 1, Claim coverage: 2, Synthesis: 1 |
 | On exhausted | N/A | Degrade to WARN and continue |
 
-## Common Dispatch Patterns
+## Dispatch Pattern: Multi-Wave with Shared State Refresh
 
-### Pattern A: Single Wave (all steps independent)
-```
-Wave 1: role_A, role_B, role_C, role_D  (sequential dispatch, 4 roles)
-→ Collect (validate all outputs)
-→ Quality Chain
-```
+This is the **only** dispatch pattern in this skill, extracted from the production BP pipeline (33 phases, 4 waves). Do not use single-wave or non-refresh patterns.
 
-### Pattern B: Multi-Wave (dependency chains with shared state refresh)
 ```
-Phase 01-07: Intake → Plan → Presearch → Fact Store
-Phase 08-09: Wave 1 Prepare → Collect (4 foundation roles)
-Phase 10:    Wave 1 Evidence Gate
-Phase 11-12: Fact Store Merge → Shared Page Refresh
-Phase 13-14: Wave 2 Prepare → Collect (revenue validation)
+Phase 01-07: Intake → Plan → Presearch → Fact Store → Shared State Init
+Phase 08-09: Wave 1 Prepare → Collect (4 foundation roles, sequential)
+Phase 10:    Wave 1 Evidence Gate (repair if FAIL, max 1 retry)
+Phase 11-12: Fact Store Merge → Shared State Refresh (Wave 2 reads this)
+Phase 13-14: Wave 2 Prepare → Collect (revenue validation, sequential)
 Phase 15:    Wave 2 Evidence Gate
-Phase 16-17: Wave 3 Prepare → Collect (competition + valuation)
-Phase 18-19: Wave 3 Evidence Gate → Shared Page Refresh
-Phase 20-21: Wave 4 Prepare → Collect (deal breaker)
-Phase 22-23: Wave 4 Evidence Gate → Shared Page Refresh
+Phase 16-17: Wave 3 Prepare → Collect (competition + valuation, sequential)
+Phase 18-19: Wave 3 Evidence Gate → Shared State Refresh
+Phase 20-21: Wave 4 Prepare → Collect (deal breaker, sequential)
+Phase 22-23: Wave 4 Evidence Gate → Shared State Refresh
 Phase 24-26: Claim Coverage → Cross-dimension → Section Package
 Phase 27-28: Synthesis Prepare → Collect
 Phase 29-33: Debate → Assembly → Readability → Judgment → Delivery
 ```
 
-### Pattern C: Prepare + Collect (split dispatch)
-```
-phase_dispatch_prepare  → returns needs_dispatch (manifests for sub-agents)
-[Coordinator spawns sub-agents, polls outputs]
-phase_dispatch_collect  → checks outputs, validates, retries if needed
-[Kernel advances to next phase]
-```
-This is the **mandatory** pattern. Never combine prepare and collect into one phase.
+### Mandatory Structural Rules
+
+1. **Prepare + Collect must be separate phases** — never combine dispatch and collect into one phase. Prepare returns `needs_dispatch` (pause), Collect validates outputs (resume).
+2. **Every wave has: Prepare → Collect → Evidence Gate** — gate checks claims against facts, triggers repair if needed.
+3. **Shared State Refresh after each significant wave** — Wave N+1 sub-agents read what Wave N discovered. See [shared-state.md](shared-state.md).
+4. **Fact Store Merge before Shared State Refresh** — sidecar facts → central store, then refresh shared state.
+5. **Sequential dispatch within each wave** — `has_more` drives the one-at-a-time loop.
 
 ## Team Lifecycle Rules
 
