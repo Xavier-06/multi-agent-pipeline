@@ -1,6 +1,6 @@
 ---
 name: "multi-agent-pipeline"
-version: "2.0.0"
+version: "2.1.0"
 description: >
   Production-grade multi-agent pipeline orchestration framework.
   Extracted from a 33-phase BP investment research pipeline and 7-phase IC industry analysis pipeline.
@@ -11,10 +11,12 @@ description: >
   (4) Instruction store for hot-loaded system prompts (edit prompts without code changes),
   (5) Shared state hub for cross-wave information passing,
   (6) Structured output protocol (3-file contract: md + facts sidecar + section sidecar),
-  (7) 4-layer output collection defense with JSON self-repair.
+  (7) 4-layer output collection defense with JSON self-repair,
+  (8) Sub-agent capability mapping (connector IDs + tool guide + prompt assembly).
   Triggers: "build a pipeline", "multi-agent workflow", "orchestration", "dispatch sub-agents",
   "wave dispatch", "quality production chain", "section package", "needs_dispatch pattern",
-  "evidence gate", "repair mechanism", "instruction store", "shared state".
+  "evidence gate", "repair mechanism", "instruction store", "shared state",
+  "sub-agent tools", "connector IDs", "tool mapping".
   NOT for: simple single-agent tasks, one-shot generation, trivial Q&A.
 ---
 
@@ -126,6 +128,54 @@ instruction_store_{profile}/
 **Loading chain**: `.md` file → Python loader fallback → explicit error marker. Template variables (`{ENTITY}`, `{TASK_ID}`, `{STAGE_TIER}`, etc.) are substituted at manifest build time.
 
 See [references/instruction-store.md](references/instruction-store.md) for directory structure, loading pattern, template variables, and prompt file structure.
+
+## Sub-Agent Capabilities & Tool Mapping
+
+A sub-agent's capability is determined by **three things** working together:
+
+1. **System prompt** — what it knows (instruction store + conclusion appendix + tool guide + stage block)
+2. **Connector IDs** — what external tools it can call (MCP servers: QCC, GitHub, NeoData, etc.)
+3. **Built-in tools** — what platform tools it always has (Read, Bash, WebSearch, WebFetch, Write)
+
+**The system prompt is a 3+ part composition** assembled at manifest build time:
+
+```python
+system_prompt = (
+    instruction_store_prompt      # Role-specific instructions (hot-loaded from .md)
+    + conclusion_appendix         # Mandatory conclusion format rules (all roles)
+    + tool_usage_guide            # Tool priority matrix (hot-loaded from _common_tool_guide.md)
+    + stage_prompt_block          # Stage-tier guidance (T1/T2/T3, optional)
+)
+```
+
+**Connector IDs** are passed in the manifest and determine MCP server access:
+
+```python
+# Example: BP pipeline gives all roles QCC connectors for enterprise DD
+_BP_QCC_CONNECTOR_IDS = [
+    'qcc-company',      # Company info, shareholders, executives
+    'qcc-executive',    # Executive positions, controlled companies
+    'qcc-risk',         # Judicial docs, dishonesty, penalties
+    'qcc-ipr',          # Patents, trademarks, copyrights
+    'qcc-operation',    # Qualifications, bidding info
+    'qcc-history',      # Historical shareholders, investments
+]
+manifest["connectorIds"] = _BP_QCC_CONNECTOR_IDS
+```
+
+**Tool guide** (hot-loaded from `_common_tool_guide.md`) tells sub-agents which tool to use for each scenario:
+
+| What you need | Preferred tool | Fallback |
+|--------------|---------------|----------|
+| Stock quotes / financials | search_gateway (prefer=auto) | WebSearch |
+| Company registry / litigation | QCC MCP tools (direct call) | WebSearch |
+| Patents / trademarks | QCC MCP (qcc-ipr) | WebSearch |
+| News / industry reports | search_gateway (prefer=multi) | WebSearch |
+| Read a specific URL | WebFetch | — |
+
+**Sub-agents do NOT have**: Glob, Grep, TaskCreate/Update. The tool guide must tell them to use `Bash: find/grep` as workarounds.
+
+See [references/subagent-capabilities.md](references/subagent-capabilities.md) for the complete capability chain: connector ID mapping, system prompt assembly, brief construction, built-in tool reference, quality validation per role, and design checklist for new pipelines.
 
 ## Shared State (Cross-Wave Information Hub)
 
