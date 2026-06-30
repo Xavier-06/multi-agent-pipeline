@@ -1,5 +1,8 @@
 # Instruction Store (Hot-Loaded System Prompts)
 
+> **Scope**: This file covers the **storage and loading** of sub-agent instructions — directory structure, index.json schema, caching mechanism, template variables.
+> For how these instructions are **assembled into the final system prompt** and combined with connector IDs / built-in tools, see [subagent-capabilities.md](subagent-capabilities.md).
+
 ## Problem
 
 Hardcoding sub-agent system prompts in Python means:
@@ -32,68 +35,134 @@ instruction_store_bp/
 
 ### index.json
 
-Maps role names to their prompt file. This is the single registry the launcher reads:
+Maps role keys to their prompt files. This is the single registry the launcher reads:
 
 ```json
 {
-  "version": "v8",
-  "roles": {
-    "market_analysis": {
-      "file": "market_analysis.md",
-      "description": "Market size, growth, segmentation analysis"
+  "meta": {
+    "version": 8,
+    "description": "BP 8-role instruction store",
+    "updated_at": "2026-06-13"
+  },
+  "roles": [
+    {
+      "key": "bp_company_team_compliance",
+      "name": "Company, Team & Compliance Analyst",
+      "file": "bp_company_team_compliance.md",
+      "description": "Wave 1: corporate structure, team, governance, equity, compliance"
     },
-    "tech_product": {
-      "file": "tech_product.md",
-      "description": "Product architecture, tech stack, IP/moat assessment"
+    {
+      "key": "bp_product_commercial",
+      "name": "Product Commercialization Analyst",
+      "file": "bp_product_commercial.md",
+      "description": "Wave 1: product matrix, customers, orders, revenue signals"
     },
-    "synthesis": {
-      "file": "synthesis.md",
-      "description": "Full report assembly from dimension analyses"
+    {
+      "key": "bp_tech_ip_moat",
+      "name": "Tech, IP & Moat Analyst",
+      "file": "bp_tech_ip_moat.md",
+      "description": "Wave 1: tech roadmap, patents, certifications, moat validation"
+    },
+    {
+      "key": "bp_统稿",
+      "name": "Synthesis Analyst",
+      "file": "bp_统稿.md",
+      "description": "Synthesis: assembles Wave 1-4 outputs into final report"
     }
-  }
+  ],
+  "pipeline_bindings": {
+    "bp": {
+      "company_team_compliance": "bp_company_team_compliance",
+      "product_commercial": "bp_product_commercial",
+      "synthesis": "bp_统稿"
+    }
+  },
+  "deprecated": [
+    {
+      "key": "bp_moat_anchor",
+      "file": "bp_moat_anchor.md.deprecated",
+      "reason": "Merged into tech_ip_moat dimension"
+    }
+  ]
 }
 ```
 
-## Loading Pattern
+**Key schema details** (from actual BP pipeline):
+- `roles` is an **array** (not a dict), each entry has `key`, `name`, `file`, `description`
+- `meta.version` is a number (not a string)
+- `pipeline_bindings` maps short slugs to full role keys (for legacy compatibility)
+- `deprecated` tracks removed roles with reasons
+- The launcher filters by `CURRENT_BP_ROLES` set to only load active roles
 
-### In Dispatch Prepare
+## Loading Pattern (from BP pipeline actual code)
+
+The instruction store uses a **module-level cache with mtime detection**, not a simple file-read-per-dispatch:
 
 ```python
-def _build_manifest(runtime_root, job_ctx, role_slug, wave):
-    # 1. Hot load system prompt from instruction store
-    instruction_store = runtime_root / "instruction_store_{profile}"
-    prompt_path = instruction_store / f"{role_slug}.md"
+# Module-level state (bp_subagent_launcher_wb.py)
+_INSTRUCTION_STORE_CACHE: dict[str, str] | None = None
+_INSTRUCTION_STORE_MTIME: float = 0
 
-    if prompt_path.exists():
-        system_prompt = prompt_path.read_text(encoding="utf-8")
-    else:
-        # Fallback: use the launcher's built-in loader
-        from scripts.subagent_launcher import load_instruction_store_prompts
-        prompts = load_instruction_store_prompts()
-        system_prompt = prompts.get(role_slug, f"ERROR: prompt not found for {role_slug}")
-
-    # 2. Template variable substitution
-    system_prompt = system_prompt.replace("{TASK_ID}", job_ctx.job_id)
-    system_prompt = system_prompt.replace("{ENTITY}", job_ctx.entity)
-    system_prompt = system_prompt.replace("{STAGE_TIER}", stage_tier or "unknown")
-    system_prompt = system_prompt.replace("{OUTPUTS_DIR}", str(outputs_dir))
-
-    # 3. Inject into manifest
-    manifest = {
-        "system_prompt": system_prompt,    # FULL text, not summarized
-        "brief_path": str(brief_path),
-        # ... other fields
-    }
+def _load_instruction_store_prompts(force_reload: bool = False) -> dict[str, str]:
+    """Load all active role prompts from index.json + .md files.
+    
+    Cache strategy:
+    - index.json mtime unchanged → return cached dict (no disk I/O)
+    - mtime changed OR force_reload=True → re-read all .md files
+    - index.json missing/corrupt → return last cache (or empty dict)
+    """
+    global _INSTRUCTION_STORE_CACHE, _INSTRUCTION_STORE_MTIME
+    
+    index_path = INSTRUCTION_STORE / 'index.json'
+    current_mtime = index_path.stat().st_mtime
+    
+    # Fast path: cache hit
+    if not force_reload and _INSTRUCTION_STORE_CACHE is not None:
+        if current_mtime == _INSTRUCTION_STORE_MTIME:
+            return _INSTRUCTION_STORE_CACHE
+    
+    # Slow path: re-read index + all .md files
+    index = json.loads(index_path.read_text())
+    prompts = {}
+    for role in index.get('roles', []):
+        role_key = role.get('key', '')
+        role_file = role.get('file', '')
+        if role_key not in CURRENT_BP_ROLES:   # Filter: only active roles
+            continue
+        path = INSTRUCTION_STORE / role_file
+        if path.exists():
+            prompts[role_key] = path.read_text(encoding='utf-8')
+    
+    _INSTRUCTION_STORE_CACHE = prompts
+    _INSTRUCTION_STORE_MTIME = current_mtime
+    return prompts
 ```
 
-### Fallback Chain
+**Key points**:
+1. ALL active role prompts are loaded at module import time (first call)
+2. Subsequent calls check `index.json` mtime — if unchanged, return cache instantly
+3. `CURRENT_BP_ROLES` set filters which roles from index.json actually get loaded
+4. Missing role → explicit error string: `"UNKNOWN BP ROLE: {key}. No instruction-store prompt is registered."`
+5. `_common_tool_guide.md` is loaded **separately** at module level (see System Prompt Assembly below)
 
-If the instruction store file is missing, the system falls back through:
+### How Prompts Flow into Manifests
 
-```
-1. instruction_store_{profile}/{role_slug}.md     ← Primary (hot-loaded file)
-2. launcher.load_instruction_store_prompts()       ← Secondary (Python loader)
-3. "ERROR: prompt not found"                       ← Explicit failure marker
+```python
+# In _spawn_one() — the actual dispatch function:
+system_prompt = ROLE_SYSTEM_PROMPTS.get(
+    sub['role_name'],
+    f"UNKNOWN BP ROLE: {sub['role_name']}. No instruction-store prompt is registered."
+)
+
+# Then 3 more parts are APPENDED (not part of instruction store):
+system_prompt = (
+    system_prompt                    # Part 1: from instruction store
+    + _CONCLUSION_APPENDIX           # Part 2: hardcoded conclusion rules
+    + _TOOL_USAGE_GUIDE              # Part 3: from _common_tool_guide.md
+    + _stage_block                   # Part 4: from bp_stage_utils (optional)
+)
+
+manifest["system_prompt"] = system_prompt  # FULL assembled text
 ```
 
 The Coordinator's dispatch instruction tells it: "Do NOT write your own simplified prompt — the manifest system_prompt contains the complete instructions."
@@ -142,45 +211,51 @@ Current stage tier: {STAGE_TIER}
 (Adjust depth based on stage — early-stage needs less granular data)
 ```
 
-## Common Tool Guide
+## Common Tool Guide (Separate File, Appended at Runtime)
 
-A shared document (`_common_tool_guide.md`) that all roles reference:
+`_common_tool_guide.md` is **NOT embedded inside role prompts**. It's loaded separately at module level and **appended** to every role's system prompt during manifest assembly:
 
-```markdown
-# Common Tool Guide
+```python
+# Module-level load (bp_subagent_launcher_wb.py)
+_TOOL_USAGE_GUIDE = _load_tool_usage_guide()   # reads _common_tool_guide.md once
 
-## File Operations
-- Use Read tool to read files
-- Use Bash for file search (find, ls)
-- Do NOT use Glob or Grep (not available in sub-agent context)
-
-## Search Tools
-- WebSearch for general web search
-- Specific data source APIs as listed in your brief
-
-## Writing Output
-- Write main analysis as Markdown
-- Write facts as JSON to sidecar file
-- Write section package as JSON to sidecar file
-- All 3 files must be complete before you are done
-
-## When You Are Done
-When all 3 output files are written, your task is complete.
-Do NOT return to the Coordinator asking for more data.
+# In _spawn_one(): appended to ALL roles after the role prompt
+system_prompt = system_prompt + _CONCLUSION_APPENDIX + _TOOL_USAGE_GUIDE + _stage_block
 ```
+
+This means role `.md` files should **NOT** include tool usage instructions — the tool guide handles that globally. Role prompts focus on methodology and output format.
+
+**What the tool guide covers** (from actual `_common_tool_guide.md`):
+1. **脚注引用规范** — footnote format (`[^N]`), source priority, mandatory for all quantitative data
+2. **搜索与数据工具** — tool priority matrix per data type:
+   - A/HK stocks → NeoData (`search_gateway prefer=auto`) or yfinance
+   - Enterprise DD → QCC MCP (direct tool calls, not Bash)
+   - News/reports → `search_gateway prefer=multi` or WebSearch
+   - URL deep reading → WebFetch or `search_deep`
+3. **禁止行为** — don't use only WebSearch, don't skip fetching full text
+
+See [subagent-capabilities.md](subagent-capabilities.md) § "System Prompt Assembly" for the complete 4-part assembly chain.
 
 ## Template Variables
 
-The instruction store supports these template variables (replaced at manifest build time):
+**Important**: In the BP pipeline, the launcher does **NOT** do `.replace()` substitution on prompt text. Variables like `{ENTITY}` and `{TASK_ID}` in the prompt files are **documentation placeholders** — the actual values come from the **brief** (which IS constructed dynamically per-dispatch).
 
-| Variable | Source | Example |
-|----------|--------|---------|
-| `{TASK_ID}` | `job_ctx.job_id` | `job_20260630_001` |
-| `{ENTITY}` | `job_ctx.entity` | `Acme Corp` |
-| `{MARKET}` | `job_ctx.market` | `us` |
-| `{STAGE_TIER}` | From profile metadata | `T1`, `T2`, `T3` |
-| `{OUTPUTS_DIR}` | Workspace outputs path | `/path/to/outputs` |
-| `{WAVE_NUMBER}` | Current wave index | `1`, `2`, `3` |
+If your pipeline needs runtime substitution, you have two options:
+
+| Approach | How | When to use |
+|----------|-----|-------------|
+| **Brief injection** (BP pattern) | Brief contains actual file paths, entity name, role-specific data. Prompt references "read from brief". | Most cases — keeps prompts generic |
+| **Python `.replace()`** | Launcher does `prompt.replace("{ENTITY}", entity)` before writing manifest | Only if prompt text itself must contain the value |
+
+**Variables commonly available via brief** (not prompt substitution):
+
+| Variable | Where it appears | Source |
+|----------|-----------------|--------|
+| Entity name | Brief header, role description | `job_ctx.entity` |
+| Task ID | Brief header | `job_ctx.job_id` |
+| Output path | Brief "Output File" section | manifest `output_path` |
+| Stage tier | Appended as `_stage_block` (Part 4) | `bp_step0_profile.json` |
+| Prior wave outputs | Brief "Prior Wave" section | Wave dependency graph |
 
 ## Benefits
 
@@ -193,8 +268,9 @@ The instruction store supports these template variables (replaced at manifest bu
 ## Adding a New Role
 
 1. Create `instruction_store_{profile}/{new_role}.md`
-2. Add entry to `index.json`
-3. Add the role to your wave definition in the profile
-4. The dispatch prepare handler will automatically pick it up
+2. Add entry to `index.json` (with `key`, `name`, `file`, `description`)
+3. Add the role key to `CURRENT_BP_ROLES` set in the launcher (Python — this IS a code change)
+4. Add the role to your wave definition in the profile
+5. The dispatch prepare handler will automatically pick it up on next mtime change
 
-No code changes needed in the runtime.
+**Important**: Adding a role requires BOTH a `.md` file AND a code change (adding to `CURRENT_BP_ROLES`). The "no code changes" claim is only true if you use a dynamic `CURRENT_BP_ROLES` that reads all roles from index.json without filtering.

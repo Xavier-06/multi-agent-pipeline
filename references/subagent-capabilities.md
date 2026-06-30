@@ -1,10 +1,14 @@
 # Sub-Agent Capabilities & Tool Mapping
 
+> **Scope**: This file covers how sub-agents **acquire their capabilities** — the complete assembly chain from raw instruction files to a fully-equipped sub-agent. For the storage/loading details of instruction files, see [instruction-store.md](instruction-store.md).
+>
+> **Relationship**: instruction-store.md = WHAT is stored + HOW it's loaded → subagent-capabilities.md = HOW it's assembled + WHAT else is combined
+
 ## The Critical Insight
 
 A sub-agent's capability is determined by **three things** working together:
 
-1. **System prompt** — what it knows and how it thinks (instruction store)
+1. **System prompt** — what it knows and how it thinks (assembled from instruction store, see [instruction-store.md](instruction-store.md))
 2. **Connector IDs** — what external tools it can call (MCP servers)
 3. **Built-in tools** — what platform tools it always has (Bash, Read, WebSearch, etc.)
 
@@ -94,12 +98,16 @@ system_prompt = (
 
 ### Part 1: Instruction Store Prompt
 
-Loaded from `instruction_store_{profile}/{role}.md`. Contains:
+Loaded from `instruction_store_{profile}/{role}.md` via module-level cache with mtime detection. Contains:
 - Role identity and expertise area
 - Analysis framework and methodology
 - Section structure requirements
 - Quality standards (claim-fact binding, counter-evidence)
 - Output format specifications
+
+**Important**: Role `.md` files should NOT include tool usage instructions — that's handled by Part 3 (`_common_tool_guide.md`) which is appended globally. Role prompts focus on methodology and output format only.
+
+See [instruction-store.md](instruction-store.md) for the complete loading mechanism and index.json schema.
 
 ### Part 2: Conclusion Appendix
 
@@ -169,7 +177,6 @@ Sub-agents always have access to these platform tools. The tool guide must refer
 |------|---------|------------|
 | `Glob` | Sub-agent context limitation | Use `Bash: find -name` |
 | `Grep` | Sub-agent context limitation | Use `Bash: grep -r` |
-| `Glob` | Sub-agent context limitation | Use `Bash: find -name` |
 | `TaskCreate/Update` | Sub-agents don't manage tasks | Just do the work |
 
 ### Tool Guide Must Tell Sub-Agents:
