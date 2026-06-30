@@ -3,7 +3,7 @@ name: "multi-agent-pipeline"
 version: "2.1.0"
 description: >
   Production-grade multi-agent pipeline orchestration framework.
-  Extracted from a 33-phase BP investment research pipeline and 7-phase IC industry analysis pipeline.
+  Extracted from a 33-phase BP investment research pipeline.
   Use when building any multi-step, multi-agent workflow that needs:
   (1) Phase-based execution with breakpoint resume and dependency auto-backfill,
   (2) Wave-based sequential sub-agent dispatch with file-lock concurrency safety,
@@ -22,14 +22,13 @@ description: >
 
 # Multi-Agent Pipeline Framework v2
 
-Production-grade orchestration patterns extracted from battle-tested investment research pipelines (BP: 33 phases, IC: 7 phases).
+Production-grade orchestration patterns extracted from a battle-tested 33-phase BP investment research pipeline.
 
 ## Architecture: Shared Kernel + Profile
 
 ```
 OrchestratorKernel          # Generic: runs phases, handles pause/resume, auto-backfill
-  ├── BPProfile             # 33-phase BP due diligence pipeline
-  ├── ICProfile             # 7-phase industry coverage pipeline
+  ├── BPProfile             # 33-phase BP due diligence pipeline (production reference)
   └── YourNewProfile        # Your domain, same kernel
 ```
 

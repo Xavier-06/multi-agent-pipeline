@@ -1,6 +1,6 @@
 # Multi-Agent Pipeline Framework
 
-Production-grade multi-agent orchestration patterns, extracted from a battle-tested 33-phase BP investment research pipeline and a 7-phase IC industry analysis pipeline.
+Production-grade multi-agent orchestration patterns, extracted from a battle-tested 33-phase BP investment research pipeline.
 
 ## What This Is
 
@@ -10,8 +10,7 @@ A **WorkBuddy skill** (not a standalone library) that teaches an AI agent how to
 
 ```
 OrchestratorKernel          # Generic: runs phases, handles pause/resume, auto-backfill
-  ├── BPProfile             # 33-phase BP due diligence pipeline
-  ├── ICProfile             # 7-phase industry coverage pipeline
+  ├── BPProfile             # 33-phase BP due diligence pipeline (production reference)
   └── YourNewProfile        # Your domain, same kernel
 ```
 
@@ -90,7 +89,6 @@ See [profile-template.md](references/profile-template.md) for the complete templ
 | Pipeline | Phases | Waves | Roles | Quality Gates | Repair Types |
 |----------|--------|-------|-------|---------------|--------------|
 | BP Due Diligence | 33 | 4 | 8 + synthesis | 7 | 3 (wave gate, claim coverage, synthesis) |
-| IC Industry Analysis | 7 | 1 | varies | 3 | 1 (wave gate) |
 
 ## Version
 
