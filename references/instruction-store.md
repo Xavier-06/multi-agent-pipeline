@@ -265,12 +265,31 @@ If your pipeline needs runtime substitution, you have two options:
 4. **A/B testing** — swap files to test different prompt strategies
 5. **Separation of concerns** — prompt authors don't need to understand Python runtime
 
-## Adding a New Role
+## Adding a New Role (3-Step Process)
 
-1. Create `instruction_store_{profile}/{new_role}.md`
-2. Add entry to `index.json` (with `key`, `name`, `file`, `description`)
-3. Add the role key to `CURRENT_BP_ROLES` set in the launcher (Python — this IS a code change)
-4. Add the role to your wave definition in the profile
-5. The dispatch prepare handler will automatically pick it up on next mtime change
+Adding a new sub-agent role requires changes in **3 places**:
 
-**Important**: Adding a role requires BOTH a `.md` file AND a code change (adding to `CURRENT_BP_ROLES`). The "no code changes" claim is only true if you use a dynamic `CURRENT_BP_ROLES` that reads all roles from index.json without filtering.
+| Step | Where | What | Why |
+|------|-------|------|-----|
+| 1 | `instruction_store_{profile}/{new_role}.md` | Create the prompt file | Role-specific instructions |
+| 2 | `instruction_store_{profile}/index.json` | Add to `roles[]` array + `pipeline_bindings.bp` | Registry entry |
+| 3 | Launcher Python (`CURRENT_BP_ROLES` set) | Add the role key string | **Runtime filter** — without this, the role is invisible |
+
+Then add the role to your wave definition in the profile class.
+
+### Why Step 3 Exists
+
+The launcher uses a hardcoded `CURRENT_BP_ROLES` set as a safety net:
+
+```python
+# bp_subagent_launcher_wb.py
+CURRENT_BP_ROLES = {
+    'bp_company_team_compliance',
+    'bp_product_commercial',
+    # ... 8 active roles
+}
+```
+
+`_load_instruction_store_prompts()` only loads prompts for roles in this set. This is intentional — if `index.json` gets corrupted, the hardcoded set ensures known-good roles still load. A dynamic loader (reading all roles from index.json) would silently lose all roles on corruption.
+
+**Tradeoff**: Adding a role requires a code change, but the system degrades gracefully when config is broken.
