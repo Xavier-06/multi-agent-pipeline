@@ -140,9 +140,17 @@ Sub-agents write 3 files: `.md` → `-data.json` → `-meta.json`. The collect p
 
 ### File Stability Check
 
+Two implementations for different call sites:
+
+**Polling variant** (used by Coordinator's collect loop — blocks intentionally):
 ```python
 def _file_stable(path: Path, interval: int = 8) -> bool:
-    """Return True if file size hasn't changed in `interval` seconds."""
+    """Return True if file size hasn't changed in `interval` seconds.
+
+    Used in the Coordinator's collect retry loop where we're actively
+    polling. The sleep is intentional — we're waiting for the sub-agent
+    to finish writing.
+    """
     if not path.exists():
         return False
     size1 = path.stat().st_size
@@ -150,6 +158,23 @@ def _file_stable(path: Path, interval: int = 8) -> bool:
     size2 = path.stat().st_size
     return size1 == size2 and size1 > 0
 ```
+
+**Non-blocking variant** (used by `_role_outputs_complete` in prepare phase):
+```python
+_STABLE_THRESHOLD_SEC = 8
+
+def _file_stable_check(path: Path, threshold: int = _STABLE_THRESHOLD_SEC) -> bool:
+    """Return True if file hasn't been modified in `threshold` seconds.
+
+    Used in prepare phase to check if a role's outputs are complete.
+    Non-blocking — just reads mtime, no sleep.
+    """
+    if not path.exists():
+        return False
+    return time.time() - path.stat().st_mtime >= threshold
+```
+
+The polling variant is correct for collect loops (we're already sleeping between polls). The non-blocking variant avoids an 8-second stall when checking role completion status.
 
 ### JSON Validity Check
 

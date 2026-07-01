@@ -139,6 +139,56 @@ For simple pipelines, you can skip the split and generate a complete plan in one
 - You have many tracked items and need LLM to prioritize correctly
 - Different entities need different analysis focus areas
 
+### Auto-Fill: Required Data Keys per Section
+
+For research workflows, each tracked item needs `required_data_keys` — the specific data points the assigned role must collect. Manually specifying these for every item is tedious and error-prone. Instead, auto-fill them from a **section-to-keys mapping**:
+
+```python
+# Define which data keys each section/role needs — customize per domain
+SECTION_DATA_KEYS = {
+    "market_analysis": ["market_size", "growth_rate", "market_share", "trends"],
+    "competitive_landscape": ["competitor_list", "positioning", "moat_type"],
+    "financial_review": ["revenue", "margin", "burn_rate", "runway"],
+    "tech_assessment": ["tech_stack", "ip_status", "scalability"],
+}
+
+def _section_to_data_keys(section: str) -> list[str]:
+    """Map a section/role to its required data keys.
+
+    This runs in the skeleton phase — before LLM enrichment — so items
+    already have a baseline set of required_data_keys. The LLM can add
+    more but doesn't start from scratch.
+    """
+    return SECTION_DATA_KEYS.get(section, [])
+
+def _generate_items(job_ctx) -> list[dict]:
+    """Generate tracked items with auto-filled required_data_keys."""
+    items = []
+    for section, keys in SECTION_DATA_KEYS.items():
+        for item_spec in _get_section_items(section, job_ctx):
+            items.append({
+                "id": item_spec["id"],
+                "item": item_spec["item"],
+                "owner": section,
+                "priority": item_spec.get("priority", "medium"),
+                "required_data_keys": _section_to_data_keys(section),  # Auto-filled
+            })
+    return items
+```
+
+**Why this matters for research workflows**: Without auto-fill, the LLM enrichment must figure out which data keys each item needs — this is deterministic (based on the section assignment) and wastes LLM reasoning budget. Auto-fill handles the mechanical part; LLM enrichment focuses on priority adjustments and discovering new items.
+
+The enrichment delta can still override or extend these:
+
+```json
+{
+  "required_data_keys_deltas": [
+    {"item_id": "I003", "add_keys": ["regulatory_status"], "reason": "Input doc mentions pending FDA approval"},
+    {"item_id": "I005", "remove_keys": ["burn_rate"], "reason": "Pre-revenue company, burn rate not applicable"}
+  ]
+}
+```
+
 ## Stage 2: Evidence Store
 
 **When**: After presearch/precompute, before dispatch.
@@ -295,6 +345,79 @@ Early-stage or lightweight projects get lighter gates:
 - Lighter stages: skip some waves, auto-degrade blocking issues, relax thresholds
 - Heavier stages: full gate enforcement
 
+### Per-Section Quality Aggregation
+
+When a wave has multiple roles/sections, the gate must evaluate each section independently AND produce a unified verdict. This aggregation pattern is critical for multi-section research pipelines.
+
+```python
+def evaluate_quality_gate(task_dir, wave, outputs_dir):
+    """Evaluate quality per-section, then aggregate into unified verdict.
+
+    For each role/section in the wave:
+      1. Load outputs (md + data sidecar + meta sidecar)
+      2. Run section-specific quality checks
+      3. Classify issues by severity
+    Then aggregate across all sections for the gate verdict.
+    """
+    section_results = {}
+
+    for role_slug in wave["roles"]:
+        section_issues = _check_section_quality(task_dir, outputs_dir, role_slug)
+        section_results[role_slug] = section_issues
+
+    # Aggregate: per-section results → unified gate verdict
+    all_issues = []
+    per_section_summary = {}
+
+    for role_slug, issues in section_results.items():
+        per_section_summary[role_slug] = {
+            "total_issues": len(issues),
+            "blocking": [i for i in issues if i["severity"] == "BLOCKING"],
+            "medium": [i for i in issues if i["severity"] == "MEDIUM"],
+            "verdict": "PASS" if not issues else
+                       "FAIL_BLOCKING" if any(i["severity"] == "BLOCKING" for i in issues)
+                       else "WARN",
+        }
+        all_issues.extend(issues)
+
+    # Gate-level verdict
+    has_blocking = any(i["severity"] == "BLOCKING" for i in all_issues)
+    gate_verdict = "FAIL_BLOCKING" if has_blocking else "WARN" if all_issues else "PASS"
+
+    return {
+        "verdict": gate_verdict,
+        "per_section": per_section_summary,
+        "all_issues": all_issues,
+        "needs_repair": has_blocking,
+    }
+```
+
+**Repair manifest generation from per-section results**: aggregate issues by role — same role with multiple issues gets ONE repair manifest:
+
+```python
+def build_repair_manifests(task_dir, gate_result):
+    """Build one repair manifest per role that has BLOCKING issues.
+
+    Even if a role has 5 issues, only ONE repair sub-agent is dispatched.
+    The manifest includes all issues for that role so the repair agent
+    can fix them all in one pass.
+    """
+    manifests = []
+    for role_slug, summary in gate_result["per_section"].items():
+        if summary["blocking"]:
+            role_issues = [i for i in gate_result["all_issues"]
+                          if i.get("role") == role_slug]
+            manifests.append({
+                "role": role_slug,
+                "issues": role_issues,
+                "issue_count": len(role_issues),
+                "blocking_count": len(summary["blocking"]),
+            })
+    return manifests
+```
+
+This pattern scales to any number of sections per wave — 3 roles or 30, the aggregation logic is the same.
+
 ## Stage 5: Coverage Validation (with Repair)
 
 **When**: After all waves complete.
@@ -420,21 +543,25 @@ Multi-layer adversarial verification:
 
 ## JSON Self-Repair
 
-Sub-agents sometimes produce malformed JSON. Before failing validation, attempt auto-repair:
+Sub-agents sometimes produce malformed JSON (unescaped quotes, trailing commas). Before failing validation, attempt auto-repair:
 
 ```python
 def safe_load_json_with_repair(path):
-    """Try loading JSON; on failure, fix common issues and retry."""
+    """Try loading JSON; on failure, fix common structural issues and retry.
+
+    Fixes: unescaped quotes, trailing commas, BOM.
+    If truly broken (not just messy), returns None — don't block the pipeline.
+    """
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         pass
 
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     fixed = fix_unescaped_quotes(text)
     try:
         data = json.loads(fixed)
-        atomic_write(path, json.dumps(data, indent=2))
+        atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False))
         return data
     except json.JSONDecodeError:
         return None
