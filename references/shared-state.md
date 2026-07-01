@@ -1,328 +1,260 @@
-# Shared State (Cross-Wave Information Hub)
+# Shared State (Cross-Wave Context Passing)
 
 ## Problem
 
-In a multi-wave pipeline, sub-agents in Wave 2+ need to know what Wave 1 discovered:
-- Which claims are already supported / contradicted / unverified?
-- What facts have been collected and with what source quality?
-- What data gaps remain?
-- What counter-evidence was found?
-- What did prior waves actually produce (their full outputs)?
+In a multi-wave pipeline, sub-agents in Wave 2+ need context from Wave 1's results. Without it, each wave works in isolation → redundant work, contradictory conclusions, no cumulative progress.
 
-Without shared state, each wave works in isolation → redundant searches, contradictory conclusions, and no cumulative progress.
+Three things need to cross wave boundaries:
 
-## Architecture Overview
+1. **Progress snapshot** — what's been verified, what's still open, what failed
+2. **Collected evidence** — all data points gathered so far, deduplicated
+3. **Prior wave outputs** — the actual reports/files produced by earlier sub-agents
 
-Shared state is implemented as **three layers**, each solving a different problem:
+## Architecture: Three Layers
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Layer 1: Shared State Snapshot                      │
-│  Machine-readable hub (JSON) + Human-readable page   │
-│  → Sub-agents read this to know current progress     │
-├─────────────────────────────────────────────────────┤
-│  Layer 2: Centralized Fact Store                     │
-│  All facts from all waves, deduplicated              │
-│  → Quality gates + final assembly read this          │
-├─────────────────────────────────────────────────────┤
-│  Layer 3: Prior Wave Outputs                         │
-│  Full dimension files from completed waves           │
-│  → Later-wave sub-agents read prior wave reports     │
-└─────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────┐
+│  Layer 1: Progress Snapshot (domain-specific hub)  │
+│  Machine-readable JSON + human-readable page       │
+│  → Sub-agents read to know what's done/open        │
+├────────────────────────────────────────────────────┤
+│  Layer 2: Centralized Evidence Store               │
+│  All sidecar data merged, deduplicated             │
+│  → Quality gates + final assembly read this        │
+├────────────────────────────────────────────────────┤
+│  Layer 3: Prior Wave Outputs                       │
+│  Full output files from completed waves            │
+│  → Later-wave sub-agents read prior reports        │
+└────────────────────────────────────────────────────┘
 ```
 
-## Layer 1: Shared State Snapshot
+Each layer is independent. Your pipeline might need all three, or just Layers 1+3.
 
-### Artifacts
+## Layer 1: Progress Snapshot
 
-| Artifact | Purpose | Consumers |
-|----------|---------|-----------|
-| `shared_state.json` | Machine-readable snapshot of claims, facts, risks, gaps | All sub-agents (via brief) |
-| `shared_diligence_page.md` | Human/agent-readable dashboard | All sub-agents (first file in brief) |
-| `claim_coverage.json` | Per-claim coverage detail | Quality chain phases |
-| `open_questions.json` | Unresolved data gaps | Sub-agents + repair |
-| `evidence_conflicts.json` | Counter-evidence queue | Debate review |
+This is the **core pattern**. After each wave completes, rebuild a snapshot from ALL available outputs.
 
-### Core Function: `build_shared_state()`
-
-This is the heart of shared state. You implement this for your domain:
+### Skeleton
 
 ```python
 def build_shared_state(task_dir: Path, after_wave: int = 0) -> dict:
-    """Rebuild the full shared state snapshot from all available sources.
+    """Rebuild progress snapshot from all available sources.
 
-    Called by both init (before Wave 1) and refresh (after each wave).
+    Called by init phase (before Wave 1) and refresh phase (after each wave).
+    You MUST implement this for your domain — the skeleton below shows
+    the general shape, but the fields depend on what your pipeline tracks.
     """
-    # 1. Load the claim matrix from your research plan
-    plan = load_json(task_dir / "research_plan.json")
-    claim_rows = plan.get("claim_matrix", [])
+    # 1. Load your planning artifact (whatever defines "what needs to be done")
+    plan = load_json(task_dir / "your_plan.json")
 
-    # 2. Collect ALL sub-agent outputs from waves 1..N
-    #    Prefer a merged packages file; fallback to scanning sidecars on disk
-    packages = _load_merged_packages(task_dir) or _scan_sidecars(task_dir)
+    # 2. Collect ALL sub-agent outputs from completed waves
+    #    Prefer a merged summary; fallback to scanning sidecars on disk
+    outputs = _load_merged_outputs(task_dir) or _scan_sidecars(task_dir)
 
-    # 3. Build fact index — merge centralized fact store + all sidecar facts
-    facts = _load_fact_store(task_dir) + _scan_fact_sidecars(task_dir)
-    fact_index = deduplicate_by_id(facts)
+    # 3. For each tracked item, determine current status
+    item_status = _resolve_all_statuses(plan, outputs)
 
-    # 4. For each claim, determine its current status
-    claim_status = {}
-    for claim in claim_rows:
-        claim_status[claim["claim_id"]] = _resolve_claim_status(claim, packages, fact_index)
+    # 4. Extract open items from sub-agent reports
+    open_items = _extract_open_items(outputs)
 
-    # 5. Extract open questions from sub-agent data_gaps
-    open_questions = _extract_open_questions(packages)
-
-    # 6. Extract risks from sub-agent counter_evidence
-    risks = _extract_risks(packages)
-
-    # 7. Derive a recommendation (optional — domain-specific)
-    recommendation = _derive_recommendation(claim_status, risks)
+    # 5. (Optional) Derive a recommendation — domain-specific
+    verdict = _derive_verdict(item_status)
 
     return {
-        "schema_version": "shared_state.v1",
+        "schema_version": "your_shared_state.v1",
         "after_wave": after_wave,
-        "claim_status": claim_status,
-        "fact_index": fact_index,
-        "open_questions": open_questions,
-        "risks": risks,
-        "current_recommendation": recommendation,
+        "item_status": item_status,
+        "open_items": open_items,
+        "verdict": verdict,
         "wave_history": _build_wave_history(task_dir, after_wave),
     }
 ```
 
-### Claim Status Lifecycle
+### Key Design Decisions
 
-Define status values that make sense for your domain. A typical set:
+**Status lifecycle**: define values for your domain. Examples:
 
-```
-planned → not_addressed       (initialized, no sub-agent output yet)
-not_addressed → supported           (facts found, high-quality source)
-not_addressed → partially_supported (some facts, lower source quality)
-not_addressed → unverified          (no facts or low confidence)
-not_addressed → contradicted        (counter-evidence found)
-```
+| Domain | Possible statuses |
+|--------|------------------|
+| Due diligence | `planned → not_addressed → supported / partially_supported / contradicted` |
+| Code review | `pending → reviewed → approved / issues_found / needs_rework` |
+| Legal analysis | `open → researched → confirmed / disputed / unresolvable` |
+| Generic | `pending → done / partial / failed` |
 
-**Conservative merge rule**: when multiple sub-agents address the same claim, keep the worst status. This prevents false confidence when evidence is mixed.
+**Conservative merge**: when multiple sub-agents touch the same item, keep the *worst* status. Prevents false confidence when evidence is mixed.
 
 ```python
-_STATUS_PRIORITY = {
-    "contradicted": 0,       # worst
-    "unverified": 1,
-    "partially_supported": 2,
-    "supported": 3,
-    "not_addressed": 4,
-    "planned": 5,
-}
-
-def _conservative_merge(status_a: str, status_b: str) -> str:
+def _conservative_merge(status_a: str, status_b: str, priority: dict) -> str:
     """Keep the worse (more conservative) status."""
-    return status_a if _STATUS_PRIORITY[status_a] <= _STATUS_PRIORITY[status_b] else status_b
+    return status_a if priority[status_a] <= priority[status_b] else status_b
 ```
 
-### Status Resolution Logic
+### Refresh Placement
 
-```python
-def _resolve_claim_status(claim, packages, fact_index):
-    """Determine a claim's current status from section packages + facts.
-
-    Customize this for your domain's quality standards.
-    """
-    cid = claim["claim_id"]
-    relevant_packages = [p for p in packages if cid in p.get("claim_ids_covered", [])]
-
-    if not relevant_packages:
-        return "not_addressed"
-
-    bound_facts = [
-        fact_index[fid]
-        for pkg in relevant_packages
-        for fid in pkg.get("facts_used", [])
-        if fid in fact_index
-    ]
-
-    if not bound_facts:
-        return "unverified"
-
-    # Check for counter-evidence
-    counter_evidence = [f for f in bound_facts if f.get("fact_type") == "counter_evidence"]
-    if counter_evidence:
-        return "contradicted"
-
-    # Check source quality — adjust tiers for your domain
-    best_tier = min(bound_facts, key=lambda f: _TIER_RANK.get(f.get("source_tier", "low"), 99))
-    tier = best_tier.get("source_tier", "low")
-
-    if tier in ("official", "regulatory", "database"):
-        return "supported"
-    elif tier in ("industry_report", "news"):
-        return "partially_supported"
-    else:
-        return "unverified"
-```
-
-### Refresh Placement in Pipeline
-
-**Always refresh AFTER the evidence gate, not before.** This ensures the shared state only reflects verified outputs.
+**Always refresh AFTER the quality gate, not before.** This ensures the snapshot only reflects verified outputs.
 
 ```
-Phase init:   shared_state_init     (before Wave 1, skeleton from plan)
-Phase W1:     wave1_dispatch → collect → evidence_gate
-Phase merge:  fact_store_merge      (sidecars → central store)
-Phase refresh: shared_state_refresh  (after Wave 1, full rebuild)  ← HERE
-Phase W2:     wave2_dispatch → collect → evidence_gate              ← reads refreshed state
-Phase refresh: shared_state_refresh  (after Wave 2)
+init phase:     shared_state_init        (before Wave 1, skeleton from plan)
+Wave 1:         dispatch → collect → quality_gate
+                sidecar_merge            (collect sidecars → central store)
+refresh phase:  shared_state_refresh     (full rebuild from disk)  ← HERE
+Wave 2:         dispatch → collect → quality_gate                  ← reads refreshed state
+refresh phase:  shared_state_refresh
 ...
 ```
 
-Which waves need a refresh?
+**Which waves need a refresh?**
 
-| Wave type | Refresh needed? | Reason |
-|-----------|----------------|--------|
-| Wave with 3+ roles | Yes | Significant new information |
-| Wave with 1-2 narrow roles | Optional | May not produce enough new info |
-| Last wave before quality chain | No | Quality chain reads packages directly |
-| Early-stage single-role wave | No | Limited data, overhead > value |
+| Condition | Refresh? | Reason |
+|-----------|----------|--------|
+| Wave with 3+ roles | Yes | Lots of new information |
+| Wave with 1-2 narrow roles | Optional | May not justify the cost |
+| Last wave before quality chain | No | Quality chain reads sidecars directly |
 
 ### Human-Readable Page
 
-Generate a Markdown dashboard alongside the JSON for sub-agents to quickly scan:
+Alongside the JSON, generate a Markdown dashboard for sub-agents to scan quickly. Typical sections:
+
+1. Current verdict / status summary
+2. Tracked items status table
+3. Confirmed evidence table
+4. Open items / gaps table
+5. Wave handoff instructions (what to reuse, what to avoid, what to verify next)
 
 ```python
 def render_shared_page(state: dict) -> str:
-    """Render shared_state.json as a human-readable Markdown dashboard.
-
-    Typical sections (customize for your domain):
-    1. Current verdict / recommendation snapshot
-    2. Claim verification status table
-    3. Confirmed facts table
-    4. Risks and counter-evidence table
-    5. Open data gaps table
-    6. Cross-dimension conflicts
-    7. Wave handoff instructions (what to reuse, what to avoid, what to verify next)
-    """
-    lines = [f"# Shared State — {state['entity']}", ""]
-    # ... render each section as a Markdown table ...
-    return "\n".join(lines)
+    """Render state JSON as Markdown dashboard. Customize for your domain."""
+    ...
 ```
 
-## Layer 2: Centralized Fact Store
+## Layer 2: Centralized Evidence Store
 
-After each wave, merge all fact sidecars into a single authoritative store:
+If your sub-agents produce structured data (not just reports), merge their sidecars into one store after each wave.
 
 ```python
-def _run_fact_store_merge(task_dir, outputs_dir):
-    """Collect all *-facts.json sidecars into one fact store.
+def merge_sidecars(outputs_dir: Path, task_dir: Path) -> dict:
+    """Scan outputs_dir for sidecar files, deduplicate, write central store.
 
-    Key design decisions:
-    - Malformed sidecars are SKIPPED, not blocking (one bad file ≠ pipeline death)
-    - Deduplication by fact_id across sidecars
-    - The merge is ADDITIVE: each call rebuilds from all sidecars on disk
+    Design rules:
+    - Malformed sidecars: SKIP, don't block (one bad file ≠ pipeline death)
+    - Dedup by item ID across sidecars
+    - ADDITIVE: each call rebuilds from all sidecars on disk
     """
-    facts = []
+    items = []
     seen_ids = set()
     malformed = []
 
-    for sidecar_path in outputs_dir.glob("*-facts.json"):
+    for path in outputs_dir.glob("*-data.json"):
         try:
-            data = json.loads(sidecar_path.read_text())
-            for fact in data.get("facts", []):
-                if fact["fact_id"] not in seen_ids:
-                    seen_ids.add(fact["fact_id"])
-                    facts.append(fact)
+            data = json.loads(path.read_text())
+            for item in data.get("items", []):
+                if item["id"] not in seen_ids:
+                    seen_ids.add(item["id"])
+                    items.append(item)
         except (json.JSONDecodeError, KeyError):
-            malformed.append({"path": str(sidecar_path)})
-            continue  # skip, don't block
+            malformed.append(str(path))
 
-    write_json(task_dir / "fact_store.json", {
-        "facts": facts,
-        "source_files": [str(p) for p in outputs_dir.glob("*-facts.json")],
-        "malformed_source_files": malformed,
+    write_json(task_dir / "evidence_store.json", {
+        "items": items,
+        "source_files": len(list(outputs_dir.glob("*-data.json"))),
+        "malformed": malformed,
     })
 ```
 
-**Why additive?** The fact store is rebuilt from scratch each time. New wave sidecars are automatically picked up because they're now on disk. No state needs to be tracked between merges.
+**Why additive?** Each merge rebuilds from scratch. New wave sidecars are on disk → automatically included. No inter-merge state to track.
+
+**Do you need this layer?** If your sub-agents only produce reports (Markdown), skip it. You only need Layer 2 when sub-agents produce structured data that quality gates or final assembly need to query.
 
 ## Layer 3: Prior Wave Outputs
 
-Later-wave sub-agents need to read the actual reports from prior waves. This is the simplest layer — just file paths.
+The simplest layer — just file paths. Later-wave sub-agents read the actual reports from earlier waves.
 
 ```python
-def _shared_inputs(task_dir):
-    """Shared state artifact paths (Layer 1)."""
-    return {
-        "shared_page": str(task_dir / "shared_diligence_page.md"),
-        "shared_state": str(task_dir / "shared_state.json"),
-        "fact_store": str(task_dir / "fact_store.json"),
-    }
+def _prior_wave_outputs(completed_waves: list[dict], outputs_dir: Path) -> dict[str, str]:
+    """Collect output file paths from all completed waves.
 
-def _prior_wave_outputs(waves_completed, task_dir, outputs_dir):
-    """Full dimension output files from all completed waves (Layer 3).
-
-    This is CUMULATIVE — Wave 4 sees Wave 1 + 2 + 3 outputs.
+    CUMULATIVE: Wave 4 sees Wave 1 + 2 + 3 outputs, not just Wave 3.
     """
     result = {}
-    for role, slug in waves_completed:
-        path = outputs_dir / f"phase2_{slug}.md"
-        if path.exists():
-            result[role] = str(path)
+    for wave in completed_waves:
+        for role, slug in wave["roles"].items():
+            path = outputs_dir / f"{slug}.md"
+            if path.exists():
+                result[role] = str(path)
     return result
 ```
 
-### Injection into Sub-Agent Briefs
+### Injection into Briefs
 
-Combine all three layers into the brief:
+Combine all three layers into each sub-agent's brief:
 
 ```python
-def _build_wave_brief(sub, task_dir, outputs_dir, waves_completed):
-    shared = _shared_inputs(task_dir)
-    prior_outputs = _prior_wave_outputs(waves_completed, task_dir, outputs_dir)
+def _build_brief_with_shared_state(sub, task_dir, outputs_dir, completed_waves):
+    shared = {
+        "progress_page": str(task_dir / "shared_state_page.md"),   # Layer 1
+        "progress_json": str(task_dir / "shared_state.json"),
+        "evidence_store": str(task_dir / "evidence_store.json"),   # Layer 2 (if applicable)
+    }
+    prior_outputs = _prior_wave_outputs(completed_waves, outputs_dir)  # Layer 3
 
-    # Merge into wave_inputs — brief builder will list these as input files
-    sub["wave_inputs"] = {**shared, **prior_outputs}
+    # Merge into brief — progress page listed FIRST so sub-agent reads it first
+    sub["shared_inputs"] = {**shared, **prior_outputs}
 
-    # The brief builder adds these to the "Input Files" section:
-    # - shared_diligence_page.md  ← listed FIRST, sub-agent reads first
+    # Brief builder adds these to the "Input Files" section:
+    # - shared_state_page.md    ← listed first, read first
     # - shared_state.json
-    # - fact_store.json
-    # - wave1_role_a.md           ← prior wave output
+    # - evidence_store.json
+    # - wave1_role_a.md         ← prior wave output
     # - wave1_role_b.md
-    # - wave2_role_c.md
 ```
 
-The brief should explicitly instruct: "Read the shared state page FIRST, then read prior wave outputs, then read raw materials."
+The brief should explicitly instruct: "Read the shared state page FIRST, then prior wave outputs, then raw materials."
+
+## Wiring Into Profile Phase Handlers
+
+```python
+def _run_shared_state_init(runtime_root, job_ctx):
+    """Before Wave 1: build skeleton state from plan."""
+    task_dir = _task_dir(runtime_root, job_ctx)
+    state = build_shared_state(task_dir, after_wave=0)
+    _write_state_artifacts(task_dir, state)  # JSON + page + open items
+    return {"ok": True, "mode": "shared_state_init"}
+
+def _run_shared_state_refresh(runtime_root, job_ctx, after_wave):
+    """After Wave N: full rebuild from all outputs on disk."""
+    task_dir = _task_dir(runtime_root, job_ctx)
+    state = build_shared_state(task_dir, after_wave=after_wave)
+    _write_state_artifacts(task_dir, state)
+    return {"ok": True, "mode": "shared_state_refresh", "result": {"after_wave": after_wave}}
+```
+
+Register these in your profile's `phase_handlers`:
+
+```python
+phase_handlers = {
+    ...
+    "phase05_shared_state_init": lambda jc: _run_shared_state_init(runtime_root, jc),
+    "phase12_shared_state_refresh_w1": lambda jc: _run_shared_state_refresh(runtime_root, jc, after_wave=1),
+    "phase19_shared_state_refresh_w3": lambda jc: _run_shared_state_refresh(runtime_root, jc, after_wave=3),
+    ...
+}
+```
 
 ## Implementation Checklist
 
-When implementing shared state for your pipeline:
+- [ ] Define your tracked items and status values (what does your pipeline track?)
+- [ ] Implement `build_shared_state()` for your domain
+- [ ] Implement `render_shared_page()` — Markdown dashboard
+- [ ] (If needed) Implement `merge_sidecars()` — sidecar scanning + dedup
+- [ ] Insert refresh phases after quality gates (always post-gate)
+- [ ] Inject shared state into briefs (progress page listed first)
+- [ ] Add conservative merge rule for conflicting results
+- [ ] Add cumulative prior wave output injection (Layer 3)
 
-- [ ] **Define your claim matrix schema** — what fields does each claim have? (claim_id, claim text, owner_section, priority, ...)
-- [ ] **Define your fact schema** — what fields does each fact have? (fact_id, value, source_url, source_tier, confidence, ...)
-- [ ] **Define your claim status values** — what statuses make sense for your domain?
-- [ ] **Implement `build_shared_state()`** — the core function that reads all sources and produces the snapshot
-- [ ] **Implement `render_shared_page()`** — Markdown dashboard for sub-agents
-- [ ] **Implement `fact_store_merge()`** — sidecar scanning + dedup + central store writing
-- [ ] **Insert refresh phases after evidence gates** — always post-gate
-- [ ] **Inject shared state into briefs** — list shared files + prior wave outputs
-- [ ] **Define conservative merge rule** — how do you handle conflicting evidence?
-- [ ] **Add stage-aware behavior** — early-stage projects should have relaxed thresholds
+## Why Not Just Pass the Prior Wave Output?
 
-## Adaptation Examples
+You might think: "Why not just tell Wave 2 to read Wave 1's output?" Three reasons:
 
-### For a Market Research Pipeline
-- Claims = market size assertions, competitive claims, customer quotes
-- Facts = data points from reports, surveys, interviews
-- Shared state = "Market Opportunity Dashboard"
-- Refresh after each research wave
-
-### For a Code Review Pipeline
-- Claims = "module X has no tests", "function Y has a bug"
-- Facts = code snippets, test results, static analysis output
-- Shared state = "Code Quality Dashboard"
-- Refresh after each reviewer completes
-
-### For a Legal Due Diligence Pipeline
-- Claims = "contract clause X is standard", "regulation Y requires Z"
-- Facts = contract excerpts, regulation text, case law citations
-- Shared state = "Legal Risk Dashboard"
-- Refresh after each legal dimension is reviewed
+1. **Wave 2 doesn't know what to look for.** Without a structured snapshot, the sub-agent has to parse the full report to find what's relevant to its dimension.
+2. **No progress tracking.** Without explicit status per item, you can't tell what's still open.
+3. **No conflict detection.** Without a centralized view, contradictory findings across waves stay hidden until final assembly — too late to fix.
