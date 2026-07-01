@@ -1,6 +1,6 @@
 ---
 name: "multi-agent-pipeline"
-version: "3.1.0"
+version: "3.2.0"
 description: >
   Production-grade multi-agent pipeline orchestration framework.
   Patterns extracted from a battle-tested 33-phase production pipeline,

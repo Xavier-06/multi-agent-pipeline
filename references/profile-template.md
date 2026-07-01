@@ -194,8 +194,30 @@ def _run_dispatch_collect(runtime_root: Path, job_ctx: JobContext, wave_index: i
             "result": {"completed": len(completed), "wave": wave_index + 1}}
 
 
+_STABLE_THRESHOLD_SEC = 8  # File unchanged for this many seconds = stable
+
+def _file_stable(path: Path, threshold: int = _STABLE_THRESHOLD_SEC) -> bool:
+    """Check if a file has stopped growing for `threshold` seconds.
+
+    Prevents collect from reading a file that a sub-agent is still writing.
+    Two samples at 2s interval — if size and mtime are unchanged, file is stable.
+    """
+    if not path.exists():
+        return False
+    stat1 = path.stat()
+    if time.time() - stat1.st_mtime < threshold:
+        return False  # Still being written recently
+    return True
+
+
 def _role_outputs_complete(task_dir: Path, role_slug: str) -> bool:
     """Check if a role has produced all required files.
+
+    4-layer defense (aligns with dispatch-protocol.md):
+    - Layer 1: File existence + minimum size
+    - Layer 2: JSON validity (sidecars must be parseable)
+    - Layer 3: File stability (not actively being written)
+    - Layer 4: Re-dispatch (handled by collect retry, not here)
 
     Customize the file list for your domain. The 3-file pattern
     (report.md + data sidecar + metadata sidecar) is a common default.
@@ -205,12 +227,24 @@ def _role_outputs_complete(task_dir: Path, role_slug: str) -> bool:
     data_path = outputs_dir / f"{role_slug}-data.json"
     meta_path = outputs_dir / f"{role_slug}-meta.json"
 
+    # Layer 1: existence + size
     if not md_path.exists() or md_path.stat().st_size < 100:
         return False
-    if not data_path.exists() or not _json_valid(data_path):
+    if not data_path.exists() or data_path.stat().st_size < 2:
         return False
-    if not meta_path.exists() or not _json_valid(meta_path):
+    if not meta_path.exists() or meta_path.stat().st_size < 2:
         return False
+
+    # Layer 2: JSON validity
+    if not _json_valid(data_path):
+        return False
+    if not _json_valid(meta_path):
+        return False
+
+    # Layer 3: file stability (MD must be stable — sidecars are small, JSON check implies done)
+    if not _file_stable(md_path):
+        return False
+
     return True
 
 

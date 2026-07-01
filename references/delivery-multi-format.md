@@ -275,6 +275,81 @@ def _run_delivery_gate(runtime_root, job_ctx):
     }
 ```
 
+## Per-Section Independent Export (Multi-Artifact Delivery)
+
+For complex reports, individual sections/dimensions may need to be exported as **standalone deliverables** alongside the consolidated report. This is common when different stakeholders consume different sections independently, or when each section is a self-contained analysis product.
+
+### Pattern
+
+```python
+SECTION_REGISTRY = {
+    "section_a": {"title": "Section A Title", "role_slug": "section_a_analyst", "order": 1},
+    "section_b": {"title": "Section B Title", "role_slug": "section_b_analyst", "order": 2},
+    # ... customize per pipeline
+}
+
+def export_per_section(task_dir, runtime_root, job_ctx):
+    """Export each section as an independent deliverable.
+
+    Use when:
+    - Different stakeholders need different sections
+    - Sections are self-contained enough to stand alone
+    - User requests individual section deliverables
+    """
+    outputs_dir = _outputs_dir(runtime_root, job_ctx)
+    delivery_dir = task_dir / "delivery"
+    delivery_dir.mkdir(parents=True, exist_ok=True)
+
+    section_exports = []
+    for section_id, section_meta in SECTION_REGISTRY.items():
+        md_path = outputs_dir / f"{section_meta['role_slug']}.md"
+        if not md_path.exists() or md_path.stat().st_size < 100:
+            continue  # Skip empty/missing sections
+
+        content = md_path.read_text(encoding="utf-8")
+
+        # Per-section DOCX — reuses consolidated report styling/rendering
+        section_docx_path = delivery_dir / f"{section_meta['title']}.docx"
+        try:
+            _build_section_docx(section_meta, content, section_docx_path)
+            section_exports.append({
+                "section_id": section_id,
+                "title": section_meta["title"],
+                "docx_path": str(section_docx_path),
+                "status": "ok",
+            })
+        except Exception as e:
+            # Per-section DOCX failure is non-blocking
+            section_exports.append({
+                "section_id": section_id,
+                "title": section_meta["title"],
+                "status": "failed",
+                "reason": str(e),
+            })
+
+    return section_exports
+```
+
+### Design Decisions
+
+| Decision | Guidance |
+|----------|----------|
+| Output directory | **Flat** in `delivery/` root — not nested subdirs, for easy access |
+| Naming | Use section title as filename (human-readable) |
+| Styling reuse | Per-section DOCX should share styling/rendering with consolidated report |
+| Conditional export | Only export sections whose MD exists and has substance (>100 chars) |
+| Artifact registration | Register each section export as a separate artifact in `artifacts.json` |
+| Graceful degradation | Per-section DOCX failure is non-blocking — MD copy still available |
+
+### When to Use Per-Section Export
+
+| Scenario | Use it? |
+|----------|---------|
+| Report has 3+ self-contained sections | Yes |
+| Different readers for different sections | Yes |
+| Single-section report or tightly coupled sections | No — consolidated is sufficient |
+| User explicitly requests per-section output | Yes |
+
 ## Graceful Degradation Summary
 
 | Format | Required? | On failure |
