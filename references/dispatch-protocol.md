@@ -23,7 +23,6 @@ while True:
 
     dispatch_info = result["dispatch_info"]
     manifests = dispatch_info["manifests"]        # ALWAYS a list of 1 (sequential mode)
-    remaining = dispatch_info.get("remaining_manifests", [])
     has_more = dispatch_info.get("has_more", False)
     is_repair = dispatch_info.get("is_repair", False)
 
@@ -48,18 +47,18 @@ while True:
     for manifest_path in manifests:
         manifest = json.loads(Path(manifest_path).read_text())
         output_path = manifest["output_path"]
-        section_path = output_path.replace(".md", "-section.json")
-        facts_path = output_path.replace(".md", "-facts.json")
+        data_path = output_path.with_suffix("").with_name(output_path.stem + "-data.json")
+        meta_path = output_path.with_suffix("").with_name(output_path.stem + "-meta.json")
 
         # Layer 1: File existence + size check
-        # Layer 2: JSON validity check (section + facts sidecars)
+        # Layer 2: JSON validity check (data + meta sidecars)
         # Layer 3: File stability check (size not growing for 8s)
         elapsed = 0
         completed = False
         while elapsed < MAX_COLLECT_RETRIES * COLLECT_RETRY_INTERVAL:
             if (Path(output_path).exists() and Path(output_path).stat().st_size > 500
-                and _json_valid(section_path)
-                and _json_valid(facts_path)
+                and _json_valid(data_path)
+                and _json_valid(meta_path)
                 and _file_stable(output_path, interval=8)):
                 completed = True
                 break
@@ -69,7 +68,6 @@ while True:
         if not completed:
             # Layer 4: Re-dispatch same role (needs_dispatch with same phase)
             log(f"Role {manifest['role']} incomplete after {elapsed}s, re-dispatching")
-            # ... re-spawn sub-agent with same manifest
 
     # 4. Advance: has_more determines next_phase
     if has_more:
@@ -86,7 +84,7 @@ team_delete()
 ### Problem
 Parallel dispatch causes:
 - API 429 rate limits
-- `fact_store.json` / `sidecar.json` concurrent write conflicts → data loss
+- Shared file concurrent write conflicts → data loss
 
 ### Solution
 Return **ONE manifest at a time** with `has_more` signaling:
@@ -101,12 +99,8 @@ prepare(second call):
   role_A done → finds role_B not done → manifests = [role_B]
   has_more = True  (roles C, D still pending)
 
-prepare(third call):
-  role_A, B done → finds role_C not done → manifests = [role_C]
-  has_more = True  (role D still pending)
-
-prepare(fourth call):
-  role_A, B, C done → manifests = [role_D]
+prepare(last call):
+  all prior done → manifests = [role_D]
   has_more = False  (last role)
   → kernel: next_phase = collect phase (advance)
 ```
@@ -115,30 +109,33 @@ prepare(fourth call):
 
 ```python
 def _role_outputs_complete(task_dir: Path, role_slug: str) -> bool:
-    """Check if a role has produced all 3 required files."""
+    """Check if a role has produced all 3 required files.
+
+    Customize file names for your domain's output contract.
+    """
     outputs_dir = task_dir / "outputs"
-    md_path = outputs_dir / f"bp_phase2_{role_slug}.md"
-    facts_path = outputs_dir / f"bp_phase2_{role_slug}-facts.json"
-    section_path = outputs_dir / f"bp_phase2_{role_slug}-section.json"
+    md_path = outputs_dir / f"{role_slug}.md"
+    data_path = outputs_dir / f"{role_slug}-data.json"
+    meta_path = outputs_dir / f"{role_slug}-meta.json"
 
     if not md_path.exists() or md_path.stat().st_size < 100:
         return False
-    if not facts_path.exists() or not _json_valid(facts_path):
+    if not data_path.exists() or not _json_valid(data_path):
         return False
-    if not section_path.exists() or not _json_valid(section_path):
+    if not meta_path.exists() or not _json_valid(meta_path):
         return False
     return True
 ```
 
 ## The 4-Layer Defense (Output Collection)
 
-Sub-agents must write 3 files: `.md` → `-facts.json` → `-section.json`. The collect phase validates all 3 through 4 layers:
+Sub-agents write 3 files: `.md` → `-data.json` → `-meta.json`. The collect phase validates through 4 layers:
 
 | Layer | Mechanism | What it catches |
 |-------|-----------|-----------------|
 | **1. Soft constraint** | Dispatch instruction mandates 3-file output + sequential-only | Coordinator-level compliance |
 | **2. Hard constraint** | `_role_outputs_complete` checks existence + size + JSON validity + `_file_stable` (8s no-growth) | Partial writes, corrupt JSON, in-progress writes |
-| **2.5. Retry buffer** | `COLLECT_RETRY_COUNT=40` × `COLLECT_RETRY_INTERVAL=30s` = **20 min total timeout** | Slow sub-agents, API delays |
+| **2.5. Retry buffer** | Configurable retry count × interval = total timeout | Slow sub-agents, API delays |
 | **3. Semi-auto** | Incomplete roles trigger `needs_dispatch` re-dispatch in the collect phase itself | Sub-agent crashes, timeout |
 
 ### File Stability Check
@@ -170,7 +167,7 @@ def _json_valid(path: Path) -> bool:
 
 ## Sub-Agent Prompt Structure
 
-Each sub-agent prompt is assembled from 3 sources:
+Each sub-agent prompt is assembled from 3+ sources:
 
 ```
 {system_prompt from instruction store}     ← Hot-loaded from instruction_store_{profile}/role.md
@@ -178,6 +175,8 @@ Each sub-agent prompt is assembled from 3 sources:
 {brief content}                            ← Generated per-wave, includes input file paths
 +
 {common tool guide}                        ← Shared instructions for all sub-agents
++
+{domain-specific appendix}                 ← Optional: conclusion rules, stage guidance
 ```
 
 ### Manifest Structure
@@ -188,19 +187,13 @@ Each sub-agent prompt is assembled from 3 sources:
     "task_id": "job_123",
     "role": "market_analysis",
     "slug": "market",
-    "label": "job_123-bp-phase2-market",
     "system_prompt": "...(full text from instruction store)...",
     "brief_path": "/path/to/brief_market.md",
     "brief_content_preview": "...(first 2000 chars of brief)...",
-    "output_path": "/path/to/outputs/bp_phase2_market.md",
+    "output_path": "/path/to/outputs/market.md",
     "timeout": 900,
-    "thinking": "high",
-    "dispatch_mode": "team_async",
-    "mode": "bypassPermissions",
-    "subagent_type": "general-purpose",
-    "team_name_template": "bp-{task_id}",
-    "connectorIds": ["qcc-company", "qcc-risk"],
-    "created_at": "2026-06-30T13:20:00",
+    "connectorIds": ["github", "your-data-source"],
+    "created_at": "2026-07-01T06:20:00",
     "status": "pending"
 }
 ```
@@ -235,38 +228,34 @@ When a gate FAIL triggers repair, the dispatch loop is identical but with these 
 | Aspect | Normal Dispatch | Repair Dispatch |
 |--------|----------------|-----------------|
 | `is_repair` | `false` | `true` |
-| `manifests` | Full wave roles | Only roles with failed claims |
-| `system_prompt` | Research/analysis | Targeted fix instruction |
+| `manifests` | Full wave roles | Only roles with quality issues |
+| `system_prompt` | Analysis/production | Targeted fix instruction |
 | `has_more` | Per sequential | Per remaining repair manifest |
-| Max retries | N/A (determined by gate) | Wave gate: 1, Claim coverage: 2, Synthesis: 1 |
+| Max retries | N/A (determined by gate) | Configure per gate type |
 | On exhausted | N/A | Degrade to WARN and continue |
 
 ## Dispatch Pattern: Multi-Wave with Shared State Refresh
 
-This is the **only** dispatch pattern in this skill, extracted from the production BP pipeline (33 phases, 4 waves). Do not use single-wave or non-refresh patterns.
+The standard pattern for multi-wave pipelines:
 
 ```
-Phase 01-07: Intake → Plan → Presearch → Fact Store → Shared State Init
-Phase 08-09: Wave 1 Prepare → Collect (4 foundation roles, sequential)
-Phase 10:    Wave 1 Evidence Gate (repair if FAIL, max 1 retry)
-Phase 11-12: Fact Store Merge → Shared State Refresh (Wave 2 reads this)
-Phase 13-14: Wave 2 Prepare → Collect (revenue validation, sequential)
-Phase 15:    Wave 2 Evidence Gate
-Phase 16-17: Wave 3 Prepare → Collect (competition + valuation, sequential)
-Phase 18-19: Wave 3 Evidence Gate → Shared State Refresh
-Phase 20-21: Wave 4 Prepare → Collect (deal breaker, sequential)
-Phase 22-23: Wave 4 Evidence Gate → Shared State Refresh
-Phase 24-26: Claim Coverage → Cross-dimension → Section Package
-Phase 27-28: Synthesis Prepare → Collect
-Phase 29-33: Debate → Assembly → Readability → Judgment → Delivery
+Phase 01-05: Intake → Plan → Precompute → Evidence Store → Shared State Init
+Phase 06-07: Wave 1 Prepare → Collect (N roles, sequential)
+Phase 08:    Wave 1 Quality Gate (repair if FAIL)
+Phase 09-10: Evidence Merge → Shared State Refresh (Wave 2 reads this)
+Phase 11-12: Wave 2 Prepare → Collect
+Phase 13:    Wave 2 Quality Gate
+Phase 14:    Shared State Refresh
+...
+Phase N:     Coverage → Cross-Section Review → Assembly → Delivery
 ```
 
 ### Mandatory Structural Rules
 
-1. **Prepare + Collect must be separate phases** — never combine dispatch and collect into one phase. Prepare returns `needs_dispatch` (pause), Collect validates outputs (resume).
-2. **Every wave has: Prepare → Collect → Evidence Gate** — gate checks claims against facts, triggers repair if needed.
+1. **Prepare + Collect must be separate phases** — never combine dispatch and collect. Prepare returns `needs_dispatch` (pause), Collect validates outputs (resume).
+2. **Every wave has: Prepare → Collect → Quality Gate** — gate checks output quality, triggers repair if needed.
 3. **Shared State Refresh after each significant wave** — Wave N+1 sub-agents read what Wave N discovered. See [shared-state.md](shared-state.md).
-4. **Fact Store Merge before Shared State Refresh** — sidecar facts → central store, then refresh shared state.
+4. **Evidence Merge before Shared State Refresh** — sidecar data → central store, then refresh shared state.
 5. **Sequential dispatch within each wave** — `has_more` drives the one-at-a-time loop.
 
 ## Team Lifecycle Rules
@@ -275,7 +264,7 @@ Phase 29-33: Debate → Assembly → Readability → Judgment → Delivery
 2. **All sub-agents use same team**: `Agent(team_name=..., mode='bypassPermissions')`
 3. **Sequential dispatch only**: ONE sub-agent at a time, wait for completion
 4. **Poll output files actively**: Check existence + size + JSON validity + stability
-5. **Retry on timeout**: Collect has built-in retry (40 × 30s = 20 min)
+5. **Retry on timeout**: Collect has built-in retry buffer
 6. **Repair on gate failure**: Gate returns repair manifests, dispatch repair sub-agents
 7. **Skip on persistent failure**: After max repair retries, degrade to WARN and continue
 8. **Delete team after delivery**: `team_delete()`

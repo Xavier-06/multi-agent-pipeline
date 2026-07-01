@@ -8,12 +8,12 @@
 
 A sub-agent's capability is determined by **three things** working together:
 
-1. **System prompt** — what it knows and how it thinks (assembled from instruction store, see [instruction-store.md](instruction-store.md))
+1. **System prompt** — what it knows and how it thinks (assembled from instruction store)
 2. **Connector IDs** — what external tools it can call (MCP servers)
 3. **Built-in tools** — what platform tools it always has (Bash, Read, WebSearch, etc.)
 
 Get ANY of these wrong and the sub-agent is crippled:
-- Missing connector IDs → can't access enterprise data (QCC, GitHub, etc.)
+- Missing connector IDs → can't access domain-specific data sources
 - Wrong system prompt → searches wrong things, produces wrong format
 - Missing built-in tool guidance → doesn't know how to use the tools it has
 
@@ -26,7 +26,7 @@ Sub-agents access external data through MCP (Model Context Protocol) connectors.
 ```python
 # In manifest construction:
 manifest = {
-    "connectorIds": ["qcc-company", "qcc-risk", "qcc-ipr"],  # MCP server IDs
+    "connectorIds": ["github", "your-data-source"],  # MCP server IDs
     # ... other fields
 }
 ```
@@ -42,48 +42,33 @@ Agent(
 
 ### Common Connector Patterns
 
-| Domain | Connector IDs | What they provide |
-|--------|--------------|-------------------|
-| Chinese enterprise DD | `qcc-company, qcc-executive, qcc-risk, qcc-ipr, qcc-operation, qcc-history` | Company registry, litigation, patents, qualifications |
-| GitHub analysis | `github` | Repo access, PR reviews, issue search |
-| Financial data (A/HK) | `neodata-financial-search` or custom | Structured financial data, stock quotes |
+| Domain | Example Connector IDs | What they provide |
+|--------|----------------------|-------------------|
+| Enterprise data | `qcc-company, qcc-risk, qcc-ipr` | Company registry, litigation, patents |
+| Code analysis | `github` | Repo access, PR reviews, issue search |
+| Financial data | `neodata-financial-search` | Structured financial data, stock quotes |
 | Document platforms | `tencent-docs`, `kdocs` | Cloud document read/write |
 | Communication | `feishu`, `dingtalk`, `wecom` | Messaging, calendar, approval flows |
 
-### Role-to-Connector Mapping (BP Example)
+### Configuring Per-Role
+
+Define a base set of connectors for your pipeline, with optional per-role overrides:
 
 ```python
-# BP pipeline: ALL roles get QCC connectors (enterprise DD)
-_BP_QCC_CONNECTOR_IDS = [
-    'qcc-company',      # Company info, shareholders, executives
-    'qcc-executive',    # Executive positions, controlled companies
-    'qcc-risk',         # Judicial docs, dishonesty, penalties
-    'qcc-ipr',          # Patents, trademarks, copyrights
-    'qcc-operation',    # Qualifications, bidding info
-    'qcc-history',      # Historical shareholders, investments
-]
+# Base connectors — all roles get these
+BASE_CONNECTOR_IDS = ["your-data-source", "your-search-tool"]
 
-# Applied uniformly to all roles:
-manifest["connectorIds"] = _BP_QCC_CONNECTOR_IDS
-```
-
-### Customizing Per-Role
-
-Some roles may need different connectors:
-
-```python
+# Per-role overrides (optional)
 ROLE_CONNECTOR_OVERRIDES = {
-    # Valuation role needs financial data connectors
-    "valuation_return": _BP_QCC_CONNECTOR_IDS + ["neodata-financial-search"],
-    # Deal breaker role might need additional risk connectors
-    "dealbreaker_risk": _BP_QCC_CONNECTOR_IDS + ["qcc-history"],
+    "financial_analyst": BASE_CONNECTOR_IDS + ["neodata-financial-search"],
+    "legal_analyst": BASE_CONNECTOR_IDS + ["pkulaw"],
 }
 
 def get_connector_ids(role_slug: str) -> list[str]:
-    return ROLE_CONNECTOR_OVERRIDES.get(role_slug, _BP_QCC_CONNECTOR_IDS)
+    return ROLE_CONNECTOR_OVERRIDES.get(role_slug, BASE_CONNECTOR_IDS)
 ```
 
-## 2. System Prompt Assembly (3-Part Composition)
+## 2. System Prompt Assembly (Multi-Part Composition)
 
 The final system prompt is assembled from 3+ sources at manifest build time:
 
@@ -92,7 +77,7 @@ system_prompt = (
     instruction_store_prompt      # 1. Role-specific instructions (hot-loaded)
     + conclusion_appendix         # 2. Mandatory conclusion format rules
     + tool_usage_guide            # 3. Tool mapping and priority guide
-    + stage_prompt_block          # 4. Stage-tier specific guidance (optional)
+    + domain_appendix             # 4. Domain-specific guidance (optional)
 )
 ```
 
@@ -102,74 +87,68 @@ Loaded from `instruction_store_{profile}/{role}.md` via module-level cache with 
 - Role identity and expertise area
 - Analysis framework and methodology
 - Section structure requirements
-- Quality standards (claim-fact binding, counter-evidence)
+- Quality standards (data binding, counter-findings)
 - Output format specifications
 
-**Important**: Role `.md` files should NOT include tool usage instructions — that's handled by Part 3 (`_common_tool_guide.md`) which is appended globally. Role prompts focus on methodology and output format only.
+**Important**: Role `.md` files should NOT include tool usage instructions — that's handled by Part 3 (common tool guide) which is appended globally. Role prompts focus on methodology and output format only.
 
-See [instruction-store.md](instruction-store.md) for the complete loading mechanism and index.json schema.
+See [instruction-store.md](instruction-store.md) for the complete loading mechanism.
 
 ### Part 2: Conclusion Appendix
 
-A mandatory block appended to ALL roles ensuring structured conclusions:
+A mandatory block appended to ALL roles ensuring structured conclusions. Customize for your domain:
 
 ```markdown
-## ⚠️ Mandatory Conclusion Rules (highest priority)
-You MUST include a "Dimension Conclusion" section at the end:
-1. One-line conclusion (≤50 chars, answer: yes/no/partial/unclear)
-2. Confidence level: High (multi-source) / Medium (single credible) / Low (BP-only or inference)
-3. Key evidence summary (1-2 sentences, cite most important facts)
+## Mandatory Conclusion Rules (highest priority)
+You MUST include a conclusion section at the end:
+1. One-line conclusion (answer: yes/no/partial/unclear)
+2. Confidence level: High (multi-source) / Medium (single credible) / Low (inference)
+3. Key evidence summary (cite most important data points)
 4. If confidence is Medium or Low: list what's needed to upgrade
 ```
 
 ### Part 3: Tool Usage Guide (Hot-Loaded)
 
-Loaded from `instruction_store_{profile}/_common_tool_guide.md`. This is the **tool mapping** that tells sub-agents:
+Loaded from `instruction_store_{profile}/_common_tool_guide.md`. Tells sub-agents which tools to use for which task:
 
 ```markdown
 ## Tool Priority Matrix
 
 | What you need | Preferred tool | Fallback |
 |--------------|---------------|----------|
-| Stock quotes / financials | search_gateway (prefer=auto) | WebSearch |
-| Company registry / litigation | QCC MCP tools (direct call) | WebSearch |
-| Patents / trademarks | QCC MCP (qcc-ipr) | WebSearch |
-| News / industry reports | search_gateway (prefer=multi) | WebSearch |
+| Domain data source X | MCP tool (direct call) | WebSearch |
+| Web search | WebSearch | — |
 | Read a specific URL | WebFetch | — |
-| Search + read in one step | search_gateway search_deep | — |
 
 ### Prohibited behaviors:
 - Do NOT use only WebSearch for everything
-- Do NOT use WebSearch when QCC can return structured data directly
-- Do NOT use only search snippets — fetch full text for key claims
+- Do NOT skip fetching full text for key sources
 ```
 
-### Part 4: Stage-Tier Block (Optional)
+### Part 4: Domain-Specific Appendix (Optional)
 
-For early-stage projects, a stage-specific guidance block:
+For projects with stage/weight classifications:
 
 ```markdown
-## Stage: T1 (Seed/Angel)
-This is an early-stage company. Adjust your analysis:
-- Revenue data may not exist — focus on team, technology, and market opportunity
-- Customer validation is about pipeline, not actual revenue
-- Valuation should use comparable transactions, not DCF
+## Stage: Early-Stage
+This is an early-stage project. Adjust your analysis:
+- Some data may not exist — focus on what's available
 - Flag data gaps honestly — do not fabricate metrics
 ```
 
 ## 3. Built-in Tools Reference
 
-Sub-agents always have access to these platform tools. The tool guide must reference them correctly:
+Sub-agents always have access to these platform tools:
 
 ### Always Available
 
 | Tool | Usage | Notes |
 |------|-------|-------|
 | `Read` | Read any file by path | Primary file reading tool |
-| `Bash` | Execute shell commands | For search_gateway, yfinance, etc. |
+| `Bash` | Execute shell commands | For scripts, CLI tools |
 | `WebSearch` | General web search | Fallback for all search needs |
 | `WebFetch` | Read URL content | Deep reading of search results |
-| `Write` | Write files | For output files only |
+| `Write` | Write files | For output files |
 
 ### NOT Available in Sub-Agents
 
@@ -188,14 +167,13 @@ Sub-agents always have access to these platform tools. The tool guide must refer
 - Do NOT use Glob or Grep (not available in sub-agent context)
 
 ## Search Operations
+- Use MCP tools directly for domain-specific data
 - Use WebSearch for general web search
-- Use Bash + search_gateway for structured/financial search
-- Use QCC MCP tools directly (no Bash needed) for enterprise data
 - Use WebFetch to read full text of important URLs
 
 ## Output Operations
 - Use Write tool for your 3 output files
-- Write all 3 files atomically (md → facts.json → section.json)
+- Write all 3 files (md + data sidecar + meta sidecar)
 ```
 
 ## 4. Brief Construction (Structured Input Document)
@@ -205,50 +183,27 @@ The brief is the sub-agent's "mission briefing" — it tells the sub-agent WHAT 
 ### Brief Structure
 
 ```markdown
-# Research Brief — {role_name}
+# Brief — {role_name}
 
 ## Output File
 `{output_path}`
 
 ## Key Input Files (read ALL of these completely)
-- Shared Diligence Page: `shared_diligence_page.md`
-- Research Plan: `research_plan.json`
-- Fact Store: `fact_store.json`
-- Shared State: `shared_state.json`
-- OCR text: `ocr_text.txt`
-- Company profile: `step0_profile.json`
+- Shared State Page: `shared_state_page.md`
+- Plan: `plan.json`
+- Evidence Store: `evidence_store.json`
 {prior wave outputs if applicable}
 
-## Your Research Plan Slice
+## Your Assignment Slice
 ```json
-{questions and claims assigned to THIS role only}
+{items and questions assigned to THIS role only}
 ```
 
-## Your Search Work Order
-```json
-{claim-level search tasks with minimum query/fetch/domain requirements}
-```
-
-## Cross-Dimension Awareness
-{other roles being investigated in parallel — for cross-referencing only}
-
-## Self-Closing Rules
-1. Data gap → search yourself (use tools per priority guide)
-2. Insufficient sources → search more, add to output
-3. Contradictory data → judge reliability, note contradiction
-4. Completion = output files written (3 files)
-
-## Search Depth Requirements
-- ≥ 8 independent search queries
-- ≥ 3 URLs deep-read (WebFetch or search_deep)
-- ≥ 3 independent source domains
-- Multi-round: broad scan → deep verify → cross-verify/counter-evidence
-
-## Delivery Protocol (highest priority)
+## Output Requirements
 3 files required:
-1. Markdown analysis: `{role}.md`
-2. Facts sidecar: `{role}-facts.json`
-3. Section package: `{role}-section.json`
+1. `{role}.md` — Main analysis
+2. `{role}-data.json` — Structured data sidecar
+3. `{role}-meta.json` — Metadata sidecar
 ```
 
 ### Brief Template Variables
@@ -256,9 +211,9 @@ The brief is the sub-agent's "mission briefing" — it tells the sub-agent WHAT 
 | Variable | Source | Example |
 |----------|--------|---------|
 | `{role_name}` | manifest role | `market_analysis` |
-| `{output_path}` | manifest output_path | `/path/to/outputs/phase2_market.md` |
+| `{output_path}` | manifest output_path | `/path/to/outputs/market.md` |
 | `{entity}` | job_ctx.entity | `Acme Corp` |
-| `{task_id}` | job_ctx.job_id | `job_20260630_001` |
+| `{task_id}` | job_ctx.job_id | `job_20260701_001` |
 
 ## 5. Quality Validation (Per-Role Output Check)
 
@@ -266,18 +221,18 @@ After sub-agent completes, validate output quality BEFORE advancing:
 
 ```python
 def check_role_quality(role_name, task_dir, output_path) -> dict:
-    """Validate sub-agent output against section package schema."""
+    """Validate sub-agent output against your domain's contract.
+
+    Customize these checks for your pipeline.
+    """
+    data_path = output_path.with_name(f"{role_name}-data.json")
+    meta_path = output_path.with_name(f"{role_name}-meta.json")
 
     checks = {
         "md_exists": output_path.exists() and output_path.stat().st_size > 200,
-        "facts_sidecar": _json_valid(facts_path) and len(facts) > 0,
-        "section_sidecar": _json_valid(section_path)
-                          and schema_version == "section_package.v2",
-        "search_audit": queries >= 8 and fetched_urls >= 3
-                       and unique_domains >= 3,
-        "claim_coverage": len(claim_ids_covered) >= 1,
-        "fact_id_binding": all fact_ids in answers/claims/narrative_blocks
-                          exist in facts sidecar,
+        "data_sidecar": _json_valid(data_path),
+        "meta_sidecar": _json_valid(meta_path),
+        # Add your domain-specific checks here
     }
 
     return {
@@ -298,7 +253,7 @@ def check_role_quality(role_name, task_dir, output_path) -> dict:
 ├─────────────────────────────────────────────────────────────────┤
 │ Manifest Builder assembles:                                     │
 │   system_prompt = instruction_store + conclusion + tool_guide   │
-│   + stage_block                                                 │
+│   + domain_appendix                                             │
 │   brief = structured input document with file paths             │
 │   connectorIds = MCP server access list                         │
 │   output_path = where to write 3 files                          │
@@ -314,14 +269,12 @@ def check_role_quality(role_name, task_dir, output_path) -> dict:
 ├─────────────────────────────────────────────────────────────────┤
 │ Sub-agent executes with:                                        │
 │   - Platform tools: Read, Bash, WebSearch, WebFetch, Write      │
-│   - MCP tools: qcc-*, github, neodata, etc.                     │
+│   - MCP tools: per connectorIds                                 │
 │   - Knowledge: system prompt + brief + input files              │
-│   - Output: 3 files (md + facts + section)                      │
+│   - Output: 3 files (md + data + meta)                          │
 ├─────────────────────────────────────────────────────────────────┤
 │ Collect validates:                                              │
 │   - 3 files exist with correct schema                           │
-│   - Search audit meets minimums                                 │
-│   - Fact IDs bind correctly                                     │
 │   - Quality score passes threshold                              │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -334,9 +287,8 @@ When creating a new pipeline, for each role define:
 - [ ] **Instruction store file** — `instruction_store_{profile}/{role}.md`
 - [ ] **Connector IDs** — which MCP servers this role needs
 - [ ] **Wave assignment** — which wave this role belongs to
-- [ ] **Research plan slice** — which questions/claims this role owns
-- [ ] **Search work order** — minimum search requirements
+- [ ] **Assignment slice** — which items/questions this role owns
 - [ ] **Prior wave inputs** — which previous wave outputs to reference
 - [ ] **Output path** — where to write the 3 output files
-- [ ] **Quality thresholds** — minimum search audit, claim coverage
-- [ ] **Stage-tier behavior** — how to adjust for early-stage projects
+- [ ] **Quality thresholds** — minimum output requirements
+- [ ] **Stage-aware behavior** — how to adjust for lightweight projects

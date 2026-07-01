@@ -39,7 +39,6 @@ class JobContext:
     job_id: str
     entity: str = ""
     query: str = ""
-    market: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     workspace: Optional[Any] = None  # injected by kernel before phase execution
 ```
@@ -225,11 +224,11 @@ phase_prepare returns:
 When resuming from `start_phase`, the kernel doesn't just start from that phase. It checks ALL upcoming phases for missing prerequisites:
 
 ```
-start_phase = phase08_dispatch_prepare
-  → phase08 needs bp_research_plan.json
-  → bp_research_plan.json doesn't exist
-  → file_to_producer says phase03_research_plan produces it
-  → kernel backfills from phase03, not phase08
+start_phase = phase06_dispatch_prepare
+  → phase06 needs plan.json
+  → plan.json doesn't exist
+  → file_to_producer says phase03_plan produces it
+  → kernel backfills from phase03, not phase06
 ```
 
 This prevents the "resume from wrong phase" problem where you skip a prerequisite.
@@ -244,9 +243,9 @@ Every phase writes a state JSON on completion. This enables:
 ### 4. Completed Phase Skip
 
 On resume, phases with `status=completed` are skipped entirely. This means:
-- You can call `execute(start_phase="phase24")` even if phases 1-23 are done
-- The kernel automatically skips 1-23 and starts at 24
-- But if phase 24 depends on a file from phase 7 that's missing, it backfills
+- You can call `execute(start_phase="phase20")` even if phases 1-19 are done
+- The kernel automatically skips 1-19 and starts at 20
+- But if phase 20 depends on a file from phase 7 that's missing, it backfills
 
 ## Workspace Layout
 
@@ -257,17 +256,17 @@ runtime_root/
 │       ├── job_record.json          # Job lifecycle state
 │       ├── state/                   # Phase state persistence
 │       │   ├── phase01.json         # {status, attempt, elapsed_seconds, result}
-│       │   ├── phase02.json
 │       │   └── ...
 │       ├── outputs/                 # Sub-agent output files
-│       │   ├── bp_phase2_market.md
-│       │   ├── bp_phase2_market-facts.json      # sidecar: discovered facts
-│       │   ├── bp_phase2_market-section.json    # sidecar: section package
+│       │   ├── role_A.md
+│       │   ├── role_A-data.json     # data sidecar
+│       │   ├── role_A-meta.json     # metadata sidecar
 │       │   └── ...
-│       ├── fact_store.json          # Central fact repository
-│       ├── research_plan.json       # Research plan (questions + claims)
+│       ├── evidence_store.json      # Central evidence repository
+│       ├── plan.json                # Planning artifact
+│       ├── shared_state.json        # Cross-wave progress snapshot
 │       └── delivery/
-│           └── final_report.docx
+│           └── final_report.md
 ├── scripts/                         # Pipeline-specific scripts
 ├── instruction_store_{profile}/     # Sub-agent system prompts (hot-loaded)
 │   ├── index.json
@@ -295,7 +294,6 @@ def _run_my_phase(runtime_root: Path, job_ctx: JobContext) -> dict[str, Any]:
         "mode": "my_dispatch",
         "dispatch_info": {
             "manifests": [str(manifest_path)],   # ONE manifest per call (sequential)
-            "remaining_manifests": [...],
             "roles": ["role_A"],
             "task_dir": str(task_dir),
         },
@@ -318,7 +316,7 @@ def _run_my_phase(runtime_root: Path, job_ctx: JobContext) -> dict[str, Any]:
 
 ```python
 class PipelineOrchestrator:
-    def submit(self, entity, market, query, input_file="") -> JobRecord:
+    def submit(self, entity, query, input_file="") -> JobRecord:
         """Register a new job, return record with job_id."""
 
     def execute(self, job_id, start_phase=None) -> dict:

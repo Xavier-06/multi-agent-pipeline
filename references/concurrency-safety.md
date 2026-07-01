@@ -3,8 +3,8 @@
 ## The Problem
 
 Multi-agent pipelines have sub-agents writing to shared files simultaneously:
-- Multiple roles in the same wave write to `fact_store.json`
-- Multiple roles write their section sidecars to the same `outputs/` directory
+- Multiple roles in the same wave write to `evidence_store.json`
+- Multiple roles write their sidecars to the same `outputs/` directory
 - Repair sub-agents modify files that other sub-agents are also reading
 
 Without protection: **last writer wins**, data loss is silent and unrecoverable.
@@ -29,7 +29,7 @@ This eliminates 90% of write conflicts. See [dispatch-protocol.md](dispatch-prot
 
 ### 2. File Locking (protect remaining shared writes)
 
-For the cases where sequential dispatch isn't enough (e.g., repair sub-agents modifying `fact_store.json` while other files reference it), use POSIX file locks.
+For the cases where sequential dispatch isn't enough (e.g., repair sub-agents modifying `evidence_store.json` while other files reference it), use POSIX file locks.
 
 ## File Lock Module
 
@@ -54,7 +54,7 @@ def locked_read_modify_write(path: Path, modify_fn) -> dict:
     6. Release lock (guaranteed by try/finally)
 
     Usage in sub-agent system_prompt:
-    "When modifying fact_store.json or any shared sidecar, you MUST use
+    "When modifying evidence_store.json or any shared sidecar, you MUST use
      locked_read_modify_write from scripts.file_lock module."
     """
     lock_path = path.with_suffix(path.suffix + ".lock")
@@ -108,9 +108,9 @@ def atomic_write(path: Path, content: str) -> None:
 
 | Scenario | Mechanism | Why |
 |----------|-----------|-----|
-| Wave dispatch (roles writing their own output files) | Sequential dispatch | Each role writes to its OWN files (role.md, role-facts.json, role-section.json) — no conflict if sequential |
-| Repair sub-agent modifying `fact_store.json` | `locked_read_modify_write` | Shared file, multiple potential writers |
-| Repair sub-agent modifying section sidecars | `locked_read_modify_write` | Shared file, could be read by other processes |
+| Wave dispatch (roles writing their own output files) | Sequential dispatch | Each role writes to its OWN files (role.md, role-data.json, role-meta.json) — no conflict if sequential |
+| Repair sub-agent modifying `evidence_store.json` | `locked_read_modify_write` | Shared file, multiple potential writers |
+| Repair sub-agent modifying shared sidecars | `locked_read_modify_write` | Shared file, could be read by other processes |
 | JSON auto-repair writing back fixed JSON | `atomic_write` | Single writer, but need to prevent partial reads |
 | Phase state JSON writes | `atomic_write` | Kernel-only, single writer |
 
@@ -122,21 +122,20 @@ Concurrency safety is Layer 1 of the broader output collection defense:
 ┌─────────────────────────────────────────────────────────────┐
 │ Layer 1: Soft Constraint                                    │
 │ Dispatch instruction mandates:                              │
-│   - 3-file output (md + facts + section)                    │
+│   - 3-file output (md + data + meta)                        │
 │   - Sequential only (no parallel dispatch)                  │
 │   - File lock for shared file modifications                 │
 ├─────────────────────────────────────────────────────────────┤
 │ Layer 2: Hard Constraint                                    │
 │ _role_outputs_complete() checks:                            │
 │   - .md exists and size > 100 bytes                         │
-│   - -facts.json exists and valid JSON                       │
-│   - -section.json exists and valid JSON                     │
+│   - -data.json exists and valid JSON                        │
+│   - -meta.json exists and valid JSON                        │
 │   - _file_stable(path, interval=8) — size unchanged 8s      │
 ├─────────────────────────────────────────────────────────────┤
 │ Layer 2.5: Retry Buffer                                     │
-│ COLLECT_RETRY_COUNT=40 × COLLECT_RETRY_INTERVAL=30s         │
-│ = 1200 seconds = 20 minutes total timeout                   │
-│ Progress detection: log which roles are complete each cycle  │
+│ Configurable retry count × interval = total timeout         │
+│ Progress detection: log which roles are complete each cycle │
 ├─────────────────────────────────────────────────────────────┤
 │ Layer 3: Semi-Auto Recovery                                 │
 │ Collect phase detects incomplete roles →                    │
@@ -175,4 +174,4 @@ def safe_load_json_with_repair(path: Path) -> dict | None:
         return None
 ```
 
-This prevents a single malformed sidecar from failing the entire validation stage. Combined with schema_version alias mapping (e.g., `bp_section_sidecar.v1` → `section_package.v1`), it handles the most common sub-agent output quirks.
+This prevents a single malformed sidecar from failing the entire validation stage. Combined with schema_version alias mapping, it handles the most common sub-agent output quirks.
