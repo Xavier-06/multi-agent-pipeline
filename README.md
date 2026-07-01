@@ -33,9 +33,11 @@ OrchestratorKernel          # Generic: runs phases, handles pause/resume, auto-b
 | **Brief Assembly** | Assignment slice + search work order + file refs | [brief-assembly.md](references/brief-assembly.md) |
 | **Stage Classification** | Gate relaxation + risk overrides per tier | [stage-classification.md](references/stage-classification.md) |
 | **Synthesis** | Final report assembly via sub-agent dispatch | [synthesis-pattern.md](references/synthesis-pattern.md) |
-| **Delivery** | Multi-format output + artifact registration | [delivery-multi-format.md](references/delivery-multi-format.md) |
+| **Delivery** | Multi-format output + per-section export + artifact registration | [delivery-multi-format.md](references/delivery-multi-format.md) |
 | **Gap Detection** | Pre-dispatch + post-wave gap tracking | [gap-detection.md](references/gap-detection.md) |
 | **Entity Verification** | Pre-flight validation + early-stop pattern | [entity-verification.md](references/entity-verification.md) |
+| **Per-Section Quality Aggregation** | Per-section evaluation + unified gate verdict + role-level repair manifests | [quality-chain.md](references/quality-chain.md#per-section-quality-aggregation) |
+| **Data Keys Auto-Fill** | Section-to-keys mapping for plan skeleton generation | [quality-chain.md](references/quality-chain.md#auto-fill-required-data-keys-per-section) |
 
 ## Project Structure
 
@@ -56,7 +58,7 @@ multi-agent-pipeline/
     ├── brief-assembly.md             # Assignment slice + search work order + file refs
     ├── stage-classification.md       # Stage/weight tiers + gate relaxation + risk overrides
     ├── synthesis-pattern.md          # Synthesis as sub-agent dispatch + citation repair
-    ├── delivery-multi-format.md      # Multi-format output + artifact registration
+    ├── delivery-multi-format.md      # Multi-format output + per-section export + artifact registration
     ├── gap-detection.md              # Pre-dispatch + post-wave gap tracking
     └── entity-verification.md        # Pre-flight validation + early-stop pattern
 ```
@@ -68,7 +70,7 @@ multi-agent-pipeline/
 3. When a phase needs sub-agents, it returns `needs_dispatch: True` with a manifest
 4. **Coordinator** (the main AI) reads the manifest, spawns sub-agents via `Agent` tool
 5. `has_more` controls whether to re-run the same phase (next role) or advance
-6. After dispatch, **collect** validates outputs with 4-layer defense (existence → JSON validity → file stability → re-dispatch)
+6. After dispatch, **collect** validates outputs with 4-layer defense (existence → JSON validity → file stability check → re-dispatch)
 7. **Quality gates** check results — failures trigger repair sub-agents, not pipeline death
 8. After max repair retries, gates degrade to WARN and pipeline continues
 
@@ -104,7 +106,7 @@ This skill was extracted from a 33-phase, 4-wave, 8-role production pipeline. Al
 
 ## Version
 
-**v3.1.0** — 15 reference files covering the complete pipeline lifecycle: kernel, dispatch, quality, shared state, instruction store, concurrency, presearch, brief assembly, stage classification, synthesis, delivery, gap detection, entity verification. See [SKILL.md](SKILL.md) for full description and triggers.
+**v3.2.1** — 15 reference files covering the complete pipeline lifecycle: kernel, dispatch, quality, shared state, instruction store, concurrency, presearch, brief assembly, stage classification, synthesis, delivery, gap detection, entity verification. v3.2 added: per-section independent export, `required_data_keys` auto-fill, per-section quality aggregation, `_file_stable` dual implementation, complete 4-layer defense in profile template. See [SKILL.md](SKILL.md) for full description and triggers.
 
 ## License
 

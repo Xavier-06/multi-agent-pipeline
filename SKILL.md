@@ -13,11 +13,15 @@ description: >
   (5) Shared state hub for cross-wave context passing,
   (6) Structured output protocol (3-file contract: md + data sidecar + meta sidecar),
   (7) 4-layer output collection defense with JSON self-repair,
-  (8) Sub-agent capability mapping (connector IDs + tool guide + prompt assembly).
+  (8) Sub-agent capability mapping (connector IDs + tool guide + prompt assembly),
+  (9) Per-section independent export for multi-artifact delivery,
+  (10) Per-section quality aggregation with unified gate verdict,
+  (11) Required data keys auto-fill from section-to-keys mapping.
   Triggers: "build a pipeline", "multi-agent workflow", "orchestration", "dispatch sub-agents",
   "wave dispatch", "quality production chain", "needs_dispatch pattern",
   "quality gate", "repair mechanism", "instruction store", "shared state",
-  "sub-agent tools", "connector IDs", "tool mapping".
+  "sub-agent tools", "connector IDs", "tool mapping",
+  "per-section export", "data keys auto-fill", "quality aggregation".
   NOT for: simple single-agent tasks, one-shot generation, trivial Q&A.
 ---
 
@@ -184,6 +188,52 @@ Wave 2 starts → sub-agents read shared_state.json → knows what Wave 1 found
 
 See [references/shared-state.md](references/shared-state.md) for the three-layer architecture, skeleton code, refresh placement rules, and injection into sub-agent briefs.
 
+## Plan Enrichment: Data Keys Auto-Fill
+
+For research workflows, the plan skeleton phase auto-fills `required_data_keys` per item from a **section-to-keys mapping**, so the LLM enrichment doesn't start from scratch:
+
+```python
+SECTION_DATA_KEYS = {
+    "market_analysis": ["market_size", "growth_rate", "market_share", "trends"],
+    "competitive_landscape": ["competitor_list", "positioning", "moat_type"],
+    # ... customize per domain
+}
+```
+
+The LLM enrichment can still add or remove keys via `required_data_keys_deltas`. This separates the mechanical part (which keys belong to which section) from the creative part (what's unique about this specific entity).
+
+See [quality-chain.md](references/quality-chain.md) for the auto-fill pattern and enrichment delta schema.
+
+## Per-Section Quality Aggregation
+
+When a wave has multiple roles/sections, the quality gate evaluates each section independently and produces a unified verdict:
+
+```
+Per-section check → per-section verdict (PASS/WARN/FAIL_BLOCKING)
+                  → aggregate across sections
+                  → unified gate verdict
+                  → build repair manifests per role (not per issue)
+```
+
+One repair manifest per role — even if a role has 5 issues, only ONE repair sub-agent is dispatched.
+
+See [quality-chain.md](references/quality-chain.md) for the aggregation pattern and repair manifest generation.
+
+## Per-Section Independent Export
+
+Complex reports can export individual sections as standalone deliverables alongside the consolidated report:
+
+```python
+SECTION_REGISTRY = {
+    "section_a": {"title": "Section A Title", "role_slug": "section_a_analyst", "order": 1},
+    # ... customize per pipeline
+}
+```
+
+Output is flat in `delivery/` root (not nested), named by section title. Per-section DOCX reuses the consolidated report's styling. Non-blocking on failure — Markdown copy still available.
+
+See [delivery-multi-format.md](references/delivery-multi-format.md) for the per-section export pattern and design decisions.
+
 ## Creating a New Pipeline
 
 To build a pipeline for a new domain:
@@ -228,7 +278,7 @@ See [references/profile-template.md](references/profile-template.md) for a compl
 | [kernel-pattern.md](references/kernel-pattern.md) | OrchestratorKernel implementation, base classes, workspace layout, phase handler contract |
 | [dispatch-protocol.md](references/dispatch-protocol.md) | Coordinator dispatch loop, sequential protocol, 4-layer defense, manifest structure |
 | [profile-template.md](references/profile-template.md) | Complete profile template with all production patterns |
-| [quality-chain.md](references/quality-chain.md) | Quality chain stages, repair mechanisms, severity levels, configurable thresholds |
+| [quality-chain.md](references/quality-chain.md) | Quality chain stages, repair mechanisms, severity levels, data keys auto-fill, per-section quality aggregation, configurable thresholds |
 | [concurrency-safety.md](references/concurrency-safety.md) | File lock module, 4-layer defense, JSON self-repair |
 | [instruction-store.md](references/instruction-store.md) | Directory structure, loading pattern, template variables |
 | [shared-state.md](references/shared-state.md) | Three-layer architecture, skeleton code, refresh placement |
@@ -237,6 +287,6 @@ See [references/profile-template.md](references/profile-template.md) for a compl
 | [brief-assembly.md](references/brief-assembly.md) | Assignment slice, search work order, file references, cross-wave passing |
 | [stage-classification.md](references/stage-classification.md) | Stage/weight tiers, gate relaxation, risk overrides, prompt blocks |
 | [synthesis-pattern.md](references/synthesis-pattern.md) | Synthesis as sub-agent dispatch, citation repair, brief construction |
-| [delivery-multi-format.md](references/delivery-multi-format.md) | Multi-format output (MD/DOCX/PDF), per-section exports, artifact registration, delivery gate |
+| [delivery-multi-format.md](references/delivery-multi-format.md) | Multi-format output (MD/DOCX/PDF), per-section independent export, artifact registration, delivery gate |
 | [gap-detection.md](references/gap-detection.md) | Pre-dispatch and post-wave gap detection, coverage integration |
 | [entity-verification.md](references/entity-verification.md) | Pre-flight entity validation, data availability assessment, early-stop pattern |
