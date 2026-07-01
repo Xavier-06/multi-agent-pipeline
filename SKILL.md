@@ -1,34 +1,35 @@
 ---
 name: "multi-agent-pipeline"
-version: "2.1.0"
+version: "3.0.0"
 description: >
   Production-grade multi-agent pipeline orchestration framework.
-  Extracted from a 33-phase BP investment research pipeline.
+  Patterns extracted from a battle-tested 33-phase production pipeline,
+  generalized for any domain.
   Use when building any multi-step, multi-agent workflow that needs:
   (1) Phase-based execution with breakpoint resume and dependency auto-backfill,
   (2) Wave-based sequential sub-agent dispatch with file-lock concurrency safety,
-  (3) Quality production chain with 3 repair mechanisms and configurable thresholds,
+  (3) Quality production chain with repair mechanisms and configurable thresholds,
   (4) Instruction store for hot-loaded system prompts (edit prompts without code changes),
-  (5) Shared state hub for cross-wave information passing,
-  (6) Structured output protocol (3-file contract: md + facts sidecar + section sidecar),
+  (5) Shared state hub for cross-wave context passing,
+  (6) Structured output protocol (3-file contract: md + data sidecar + meta sidecar),
   (7) 4-layer output collection defense with JSON self-repair,
   (8) Sub-agent capability mapping (connector IDs + tool guide + prompt assembly).
   Triggers: "build a pipeline", "multi-agent workflow", "orchestration", "dispatch sub-agents",
-  "wave dispatch", "quality production chain", "section package", "needs_dispatch pattern",
-  "evidence gate", "repair mechanism", "instruction store", "shared state",
+  "wave dispatch", "quality production chain", "needs_dispatch pattern",
+  "quality gate", "repair mechanism", "instruction store", "shared state",
   "sub-agent tools", "connector IDs", "tool mapping".
   NOT for: simple single-agent tasks, one-shot generation, trivial Q&A.
 ---
 
-# Multi-Agent Pipeline Framework v2
+# Multi-Agent Pipeline Framework v3
 
-Production-grade orchestration patterns extracted from a battle-tested 33-phase BP investment research pipeline.
+Production-grade orchestration patterns, generalized from a battle-tested 33-phase production pipeline into domain-agnostic building blocks.
 
 ## Architecture: Shared Kernel + Profile
 
 ```
 OrchestratorKernel          # Generic: runs phases, handles pause/resume, auto-backfill
-  ├── BPProfile             # 33-phase BP due diligence pipeline (production reference)
+  ├── ExampleProfile        # Reference implementation (e.g. due diligence, code review)
   └── YourNewProfile        # Your domain, same kernel
 ```
 
@@ -52,22 +53,22 @@ See [references/kernel-pattern.md](references/kernel-pattern.md) for the complet
 ## Wave-Based Sequential Dispatch
 
 ```
-Wave 1: role_A, role_B, role_C, role_D   (sequential: one at a time)
-         → Evidence Gate (repair if FAIL, max 1 retry, then degrade)
-         → Fact Store Merge
+Wave 1: role_A, role_B, role_C   (sequential: one at a time)
+         → Quality Gate (repair if FAIL, then degrade)
+         → Evidence Merge
          → Shared State Refresh
-Wave 2: role_E, role_F                    (reads shared state from Wave 1)
-         → Evidence Gate → Shared State Refresh
-Wave 3: role_G                            (depends on Wave 1+2)
+Wave 2: role_D, role_E            (reads shared state from Wave 1)
+         → Quality Gate → Shared State Refresh
+Wave 3: role_F                    (depends on Wave 1+2)
          → Quality Chain → Delivery
 ```
 
-**Why sequential, not parallel**: Parallel dispatch causes API 429 rate limits AND `fact_store.json` concurrent write conflicts. Sequential dispatch with `has_more` solves both.
+**Why sequential, not parallel**: Parallel dispatch causes API 429 rate limits AND shared file concurrent write conflicts. Sequential dispatch with `has_more` solves both.
 
 **4-layer output collection defense**:
 1. **Soft constraint**: Dispatch instruction mandates 3-file output + sequential-only
 2. **Hard constraint**: File existence + JSON validity + 8-second stability check
-3. **Retry buffer**: 40 × 30s = 20 min total timeout
+3. **Retry buffer**: Configurable retry count × interval = total timeout
 4. **Semi-auto recovery**: Incomplete roles trigger re-dispatch
 
 See [references/dispatch-protocol.md](references/dispatch-protocol.md) for the complete Coordinator dispatch loop, sequential protocol, 4-layer defense, manifest structure, and repair dispatch patterns.
@@ -77,34 +78,34 @@ See [references/dispatch-protocol.md](references/dispatch-protocol.md) for the c
 Quality is built IN during production, not checked at the end. Each stage has a **repair mechanism** — gate failures don't kill the pipeline, they trigger targeted fixes.
 
 ```
-Research Plan → Fact Store → Wave Dispatch → Evidence Gate → Claim Coverage → Section Package → Synthesis → Debate → Assembly → Delivery Gate
+Plan → Evidence Store → Wave Dispatch → Quality Gate → Coverage Check → Synthesis → Cross-Section Review → Assembly → Delivery Gate
 ```
 
 | Stage | Artifact | Repair mechanism | Max retries | On exhaustion |
 |-------|----------|-----------------|-------------|---------------|
-| Research Plan | `research_plan.json` | LLM enrichment via needs_dispatch | N/A | N/A |
-| Fact Store | `fact_store.json` | locked_read_modify_write for concurrent writes | N/A | N/A |
-| Evidence Gate | `wave{N}_gate.json` | Repair sub-agent (sequential, per role) | 1 | Degrade blocking→WARN |
-| Claim Coverage | `claim_coverage.json` | Repair sub-agent (per owner_section) | 2 | PASS_WITH_DISCLOSURE |
-| Synthesis | `synthesis.md` | Footnote repair sub-agent | 1 | WARN + deferred_fixes |
-| Debate Review | `debate_review.json` | Targeted rewrite (flagged sections only) | 1 | WARN + deferred_fixes |
+| Plan | `plan.json` | LLM enrichment via needs_dispatch | N/A | N/A |
+| Evidence Store | `evidence_store.json` | locked_read_modify_write for concurrent writes | N/A | N/A |
+| Quality Gate | `wave{N}_gate.json` | Repair sub-agent (sequential, per role) | 1 | Degrade blocking→WARN |
+| Coverage Check | `coverage_gate.json` | Repair sub-agent (per owner) | 2 | PASS_WITH_DISCLOSURE |
+| Synthesis | `synthesis.md` | Citation density repair sub-agent | 1 | WARN + deferred_fixes |
+| Cross-Section Review | `review.json` | Targeted rewrite (flagged sections only) | 1 | WARN + deferred_fixes |
 | Delivery Gate | Final artifact | Auto-redact (L1), hard-block (L2 only) | 0 | L2 blocks, others deferred |
 
-**Severity levels** (post-relaxation):
-- **BLOCKING**: Hard stop (empty output, 100% unbound claims, no packages at all)
-- **MEDIUM**: Log as WARN, continue (was HIGH — relaxed for structural issues)
+**Severity levels**:
+- **BLOCKING**: Hard stop (empty output, zero data items, no sidecars at all)
+- **MEDIUM**: Log as WARN, continue (structural issues, low coverage)
 - **LOW**: Informational only
 
-**Footnote density is configurable**: Default is 3 refs per 2000 chars, but adjust per domain — competitive analysis can use 2, literature review can use 4.
+**Citation density is configurable**: Default is 3 refs per 2000 chars, but adjust per domain — competitive analysis can use 2, academic review can use 4.
 
-See [references/quality-chain.md](references/quality-chain.md) for the complete quality chain with all 3 repair mechanisms, severity levels, claim status lifecycle, and configurable thresholds.
+See [references/quality-chain.md](references/quality-chain.md) for the complete quality chain with all repair mechanisms, severity levels, status lifecycle, and configurable thresholds.
 
 ## Concurrency Safety
 
 Multi-agent pipelines have sub-agents writing to shared files. Two-pronged protection:
 
 1. **Sequential dispatch** — dispatch ONE role at a time, eliminates 90% of conflicts
-2. **File locking** — `locked_read_modify_write()` with POSIX `fcntl.flock` for shared files (fact_store, sidecars)
+2. **File locking** — `locked_read_modify_write()` with POSIX `fcntl.flock` for shared files (evidence_store, shared sidecars)
 3. **Atomic writes** — `atomic_write()` (write-to-temp + `os.replace`) prevents partial reads
 
 See [references/concurrency-safety.md](references/concurrency-safety.md) for the complete file lock module, the 4-layer defense diagram, and JSON self-repair.
@@ -124,7 +125,7 @@ instruction_store_{profile}/
 
 **Benefits**: Edit prompts without code changes, version-controlled, A/B testable, single source of truth per role.
 
-**Loading chain**: `.md` file → Python loader fallback → explicit error marker. Template variables (`{ENTITY}`, `{TASK_ID}`, `{STAGE_TIER}`, etc.) are substituted at manifest build time.
+**Loading chain**: `.md` file → module-level cache with mtime detection → explicit error marker for missing roles.
 
 See [references/instruction-store.md](references/instruction-store.md) for directory structure, loading pattern, template variables, and prompt file structure.
 
@@ -132,8 +133,8 @@ See [references/instruction-store.md](references/instruction-store.md) for direc
 
 A sub-agent's capability is determined by **three things** working together:
 
-1. **System prompt** — what it knows (instruction store + conclusion appendix + tool guide + stage block)
-2. **Connector IDs** — what external tools it can call (MCP servers: QCC, GitHub, NeoData, etc.)
+1. **System prompt** — what it knows (instruction store + conclusion appendix + tool guide + domain appendix)
+2. **Connector IDs** — what external tools it can call (MCP servers)
 3. **Built-in tools** — what platform tools it always has (Read, Bash, WebSearch, WebFetch, Write)
 
 **The system prompt is a 3+ part composition** assembled at manifest build time:
@@ -143,54 +144,45 @@ system_prompt = (
     instruction_store_prompt      # Role-specific instructions (hot-loaded from .md)
     + conclusion_appendix         # Mandatory conclusion format rules (all roles)
     + tool_usage_guide            # Tool priority matrix (hot-loaded from _common_tool_guide.md)
-    + stage_prompt_block          # Stage-tier guidance (T1/T2/T3, optional)
+    + domain_appendix             # Domain/stage-specific guidance (optional)
 )
 ```
 
-**Connector IDs** are passed in the manifest and determine MCP server access:
+**Connector IDs** are passed in the manifest and determine MCP server access. Configure a base set + optional per-role overrides:
 
 ```python
-# Example: BP pipeline gives all roles QCC connectors for enterprise DD
-_BP_QCC_CONNECTOR_IDS = [
-    'qcc-company',      # Company info, shareholders, executives
-    'qcc-executive',    # Executive positions, controlled companies
-    'qcc-risk',         # Judicial docs, dishonesty, penalties
-    'qcc-ipr',          # Patents, trademarks, copyrights
-    'qcc-operation',    # Qualifications, bidding info
-    'qcc-history',      # Historical shareholders, investments
-]
-manifest["connectorIds"] = _BP_QCC_CONNECTOR_IDS
+BASE_CONNECTOR_IDS = ["your-data-source", "your-search-tool"]
+
+ROLE_CONNECTOR_OVERRIDES = {
+    "financial_analyst": BASE_CONNECTOR_IDS + ["neodata-financial-search"],
+    "legal_analyst": BASE_CONNECTOR_IDS + ["pkulaw"],
+}
 ```
 
-**Tool guide** (hot-loaded from `_common_tool_guide.md`) tells sub-agents which tool to use for each scenario:
-
-| What you need | Preferred tool | Fallback |
-|--------------|---------------|----------|
-| Stock quotes / financials | search_gateway (prefer=auto) | WebSearch |
-| Company registry / litigation | QCC MCP tools (direct call) | WebSearch |
-| Patents / trademarks | QCC MCP (qcc-ipr) | WebSearch |
-| News / industry reports | search_gateway (prefer=multi) | WebSearch |
-| Read a specific URL | WebFetch | — |
+**Tool guide** (hot-loaded from `_common_tool_guide.md`) tells sub-agents which tool to use for each scenario. Customize for your domain's data sources.
 
 **Sub-agents do NOT have**: Glob, Grep, TaskCreate/Update. The tool guide must tell them to use `Bash: find/grep` as workarounds.
 
 See [references/subagent-capabilities.md](references/subagent-capabilities.md) for the complete capability chain: connector ID mapping, system prompt assembly, brief construction, built-in tool reference, quality validation per role, and design checklist for new pipelines.
 
-## Shared State (Cross-Wave Information Hub)
+## Shared State (Cross-Wave Context Passing)
 
 After each wave, a dedicated phase rebuilds a shared state snapshot that subsequent waves read:
 
 ```
-Wave 1 completes → Evidence Gate → Fact Store Merge → Shared State Refresh
+Wave 1 completes → Quality Gate → Evidence Merge → Shared State Refresh
                                                            ↓
 Wave 2 starts → sub-agents read shared_state.json → knows what Wave 1 found
 ```
 
-**Artifacts**: `shared_state.json` (machine-readable claim status) + `shared_diligence_page.md` (human-readable dashboard) + `open_questions.json` + `evidence_conflicts.json`
+**Three-layer architecture**:
+1. **Progress snapshot** — `shared_state.json` (machine-readable) + `shared_state_page.md` (human-readable dashboard)
+2. **Centralized evidence store** — all sidecar data merged, deduplicated
+3. **Prior wave outputs** — full output files from completed waves, listed in briefs
 
-**Claim status lifecycle**: `planned → supported | partially_supported | not_addressed | contradicted`
+**Status lifecycle** (customize for your domain): `pending → done / partial / failed`
 
-See [references/shared-state.md](references/shared-state.md) for the shared state schema, refresh flow, diligence page format, and injection into sub-agent briefs.
+See [references/shared-state.md](references/shared-state.md) for the three-layer architecture, skeleton code, refresh placement rules, and injection into sub-agent briefs.
 
 ## Creating a New Pipeline
 
@@ -199,12 +191,12 @@ To build a pipeline for a new domain:
 1. **Define phases**: Map your workflow to the prepare/collect split pattern
 2. **Define waves**: Group roles by dependency, with shared state refresh between waves
 3. **Define roles**: Each role = one sub-agent with an instruction store prompt file
-4. **Define gates**: Evidence gate per wave + claim coverage + synthesis quality check
+4. **Define gates**: Quality gate per wave + coverage check + synthesis quality check
 5. **Configure repair**: Set max retries and degradation policy per gate type
-6. **Configure thresholds**: Footnote density, section package validation rules, debate review severity
+6. **Configure thresholds**: Citation density, output validation rules, review severity
 7. **Declare dependencies**: `phase_prerequisites()` + `phase_outputs()` for precise auto-backfill
 
-See [references/profile-template.md](references/profile-template.md) for a complete profile template with all production patterns: shared state init/refresh, research plan enrichment, wave dispatch with sequential has_more, evidence gate with repair, and instruction store integration.
+See [references/profile-template.md](references/profile-template.md) for a complete profile template with all production patterns: shared state init/refresh, plan enrichment, wave dispatch with sequential has_more, quality gate with repair, and instruction store integration.
 
 ## Error Recovery Patterns
 
@@ -213,11 +205,10 @@ See [references/profile-template.md](references/profile-template.md) for a compl
 | Breakpoint resume | Pipeline interrupted | `start_phase` + kernel auto-backfills missing dependencies |
 | Phase skip | Phase already completed | Kernel reads phase state, skips `status=completed` |
 | Gate repair | Gate FAIL | Repair manifest → sequential dispatch → re-run gate → degrade on exhaustion |
-| Collect retry | Sub-agent slow/incomplete | 40 × 30s poll cycles with 4-layer validation |
+| Collect retry | Sub-agent slow/incomplete | Configurable poll cycles with 4-layer validation |
 | Re-dispatch | Role incomplete after collect | Collect returns needs_dispatch for incomplete roles |
-| Stage tier degradation | Early-stage project | T1/T2 auto-degrade blocking claims, skip unnecessary waves |
+| Stage-aware degradation | Lightweight project | Auto-degrade blocking issues, skip unnecessary waves |
 | JSON self-repair | Malformed sub-agent JSON | Auto-fix unescaped quotes, trailing commas before failing |
-| Assembly fallback | Final DOCX fails | Deliver Markdown instead |
 
 ## Common Pitfalls
 
@@ -227,5 +218,18 @@ See [references/profile-template.md](references/profile-template.md) for a compl
 - **Prompt must include tool restrictions**: Sub-agents don't have Glob/Grep. Tell them to use Bash + Read.
 - **Sub-agents must be self-closing**: If they find data gaps, they search themselves. Only return when output file is written.
 - **Never hardcode system prompts**: Use instruction store `.md` files. Hardcoded prompts are unmaintainable at scale.
-- **Always declare phase_prerequisites and phase_outputs**: Without them, dependency auto-backfill is blind and will either miss prerequisites or backfill too far.
+- **Always declare phase_prerequisites and phase_outputs**: Without them, dependency auto-backfill is blind.
 - **Shared state refresh after every significant wave**: Without it, Wave 2+ sub-agents work in isolation.
+
+## Reference Files
+
+| File | What it covers |
+|------|---------------|
+| [kernel-pattern.md](references/kernel-pattern.md) | OrchestratorKernel implementation, base classes, workspace layout, phase handler contract |
+| [dispatch-protocol.md](references/dispatch-protocol.md) | Coordinator dispatch loop, sequential protocol, 4-layer defense, manifest structure |
+| [profile-template.md](references/profile-template.md) | Complete profile template with all production patterns |
+| [quality-chain.md](references/quality-chain.md) | Quality chain stages, repair mechanisms, severity levels, configurable thresholds |
+| [concurrency-safety.md](references/concurrency-safety.md) | File lock module, 4-layer defense, JSON self-repair |
+| [instruction-store.md](references/instruction-store.md) | Directory structure, loading pattern, template variables |
+| [shared-state.md](references/shared-state.md) | Three-layer architecture, skeleton code, refresh placement |
+| [subagent-capabilities.md](references/subagent-capabilities.md) | Connector mapping, prompt assembly, brief construction, tool reference |
