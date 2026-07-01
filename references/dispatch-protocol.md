@@ -165,6 +165,68 @@ def _json_valid(path: Path) -> bool:
         return False
 ```
 
+### Collect Retry Loop (Complete Implementation)
+
+The collect phase wraps the 4-layer defense in a retry loop with progress logging:
+
+```python
+def _collect_with_retry(wave_name, check_fn, job_id, outputs_dir,
+                        retry_count=40, retry_interval=30):
+    """Poll for sub-agent outputs with retry buffer and progress detection.
+
+    Args:
+        wave_name: Label for logging (e.g., "wave1_collect")
+        check_fn: Callable that returns (completed: list, incomplete: list)
+        retry_count: Max poll cycles (default 40)
+        retry_interval: Seconds between polls (default 30)
+        Total timeout: retry_count × retry_interval = 1200s = 20 min
+    """
+    for attempt in range(1, retry_count + 1):
+        completed, incomplete = check_fn()
+
+        # Progress logging — helps debug stuck sub-agents
+        log(f"[{wave_name}] attempt {attempt}/{retry_count}: "
+            f"{len(completed)} complete, {len(incomplete)} pending")
+        for role in incomplete:
+            log(f"  ⏳ {role} — still waiting")
+
+        if not incomplete:
+            return {
+                "ok": True,
+                "mode": f"{wave_name}",
+                "result": {
+                    "completed": len(completed),
+                    "attempts_used": attempt,
+                },
+            }
+
+        if attempt < retry_count:
+            sleep(retry_interval)
+
+    # Exhausted all retries — Layer 3: return needs_dispatch for incomplete roles
+    log(f"[{wave_name}] TIMEOUT after {retry_count} attempts. "
+        f"Incomplete: {incomplete}")
+    return {
+        "ok": True,
+        "needs_dispatch": True,
+        "has_more": False,
+        "mode": f"{wave_name}",
+        "dispatch_info": {
+            "incomplete_roles": incomplete,
+            "reason": "collect_timeout",
+            "attempts_exhausted": retry_count,
+        },
+        "instruction": f"Re-dispatch incomplete roles: {incomplete}. "
+                       f"These sub-agents failed to produce valid output within "
+                       f"{retry_count * retry_interval}s.",
+    }
+```
+
+**Key design decisions**:
+- **Progress detection**: Each cycle logs which roles are done vs pending. If a role stays "pending" for 10+ cycles, you know it's stuck.
+- **Graceful timeout**: When retries exhaust, return `needs_dispatch` for incomplete roles rather than `ok: False`. This triggers Layer 3 re-dispatch instead of killing the pipeline.
+- **Attempt tracking**: The result includes `attempts_used` so you can tell if a wave collected quickly (2 attempts) or barely made it (39 attempts).
+
 ## Sub-Agent Prompt Structure
 
 Each sub-agent prompt is assembled from 3+ sources:

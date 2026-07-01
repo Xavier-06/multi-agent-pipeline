@@ -233,3 +233,6 @@ See [references/profile-template.md](references/profile-template.md) for a compl
 | [instruction-store.md](references/instruction-store.md) | Directory structure, loading pattern, template variables |
 | [shared-state.md](references/shared-state.md) | Three-layer architecture, skeleton code, refresh placement |
 | [subagent-capabilities.md](references/subagent-capabilities.md) | Connector mapping, prompt assembly, brief construction, tool reference |
+| [presearch-pattern.md](references/presearch-pattern.md) | Pre-dispatch intelligence gathering, evidence store seeding, cost control |
+| [brief-assembly.md](references/brief-assembly.md) | Assignment slice, search work order, file references, cross-wave passing |
+| [stage-classification.md](references/stage-classification.md) | Stage/weight tiers, gate relaxation, risk overrides, prompt blocks |

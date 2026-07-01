@@ -36,6 +36,109 @@ The plan defines what needs to be investigated and by whom. Gate rule: `plan_sta
 
 **Enrichment pattern**: Script generates skeleton → LLM enriches via `needs_dispatch` → collect merges. Separates deterministic structure from creative reasoning.
 
+### Plan Enrichment (Split Phase)
+
+The plan is built in two halves: a **deterministic skeleton** from a script, then **creative enrichment** from an LLM. This separation ensures structural consistency while allowing domain-aware reasoning.
+
+**Why split?** A script can reliably generate schemas, IDs, and owner assignments. An LLM is better at reading the input document and deciding what's important, what's missing, and what should be prioritized. Combining them in one step produces worse results than separating them.
+
+```python
+def _run_plan(runtime_root, job_ctx):
+    """Phase A: Script generates deterministic skeleton."""
+    task_dir = _task_dir(runtime_root, job_ctx)
+
+    skeleton = {
+        "plan_status": "skeleton",
+        "entity": job_ctx.entity,
+        "tracked_items": _generate_items(job_ctx),       # Deterministic
+        "questions": _generate_questions(job_ctx),        # Deterministic
+        "enriched_fields": [],                            # LLM fills this
+    }
+    write_json(task_dir / "plan.json", skeleton)
+
+    # Return needs_dispatch — Coordinator enriches via LLM
+    instruction_path = runtime_root / "instruction_store_{profile}" / "plan_enrichment.md"
+    return {
+        "ok": True,
+        "needs_dispatch": True,
+        "has_more": False,
+        "mode": "plan",
+        "instruction": f"Read the plan skeleton and input document. "
+                       f"Output enrichment delta JSON. "
+                       f"Resume with start_phase='plan_collect'.",
+    }
+```
+
+### Enrichment Delta Schema
+
+The LLM outputs a **delta** (not the full plan). The collect phase merges it:
+
+```json
+{
+  "schema_version": "enrichment_delta.v1",
+  "priority_deltas": [
+    {"item_id": "I003", "new_priority": "critical", "reason": "Input doc emphasizes this heavily"}
+  ],
+  "additional_items": [
+    {
+      "id": "I020",
+      "item": "New item discovered from input document",
+      "owner": "role_B",
+      "priority": "high"
+    }
+  ],
+  "excluded_items": [
+    {"item_id": "I007", "reason": "Not relevant for this specific entity"}
+  ],
+  "refined_questions": [
+    {"id": "Q1", "question": "More specific version of the question based on doc content"}
+  ]
+}
+```
+
+### Collect (Merge) Phase
+
+```python
+def _run_plan_collect(runtime_root, job_ctx):
+    """Phase B: Merge LLM enrichment into the skeleton plan."""
+    task_dir = _task_dir(runtime_root, job_ctx)
+    plan = load_json(task_dir / "plan.json")
+    delta_path = task_dir / "enrichment_delta.json"
+
+    if delta_path.exists():
+        delta = load_json(delta_path)
+
+        # Apply priority deltas
+        for d in delta.get("priority_deltas", []):
+            for item in plan["tracked_items"]:
+                if item["id"] == d["item_id"]:
+                    item["priority"] = d["new_priority"]
+
+        # Add new items
+        plan["tracked_items"].extend(delta.get("additional_items", []))
+
+        # Remove excluded items
+        excluded_ids = {e["item_id"] for e in delta.get("excluded_items", [])}
+        plan["tracked_items"] = [i for i in plan["tracked_items"] if i["id"] not in excluded_ids]
+
+        # Refine questions
+        refined = {q["id"]: q["question"] for q in delta.get("refined_questions", [])}
+        for q in plan["questions"]:
+            if q["id"] in refined:
+                q["question"] = refined[q["id"]]
+
+    plan["plan_status"] = "ready"
+    write_json(task_dir / "plan.json", plan)
+    return {"ok": True, "mode": "plan_collect", "result": {"plan_status": "ready"}}
+```
+
+### When to Skip Enrichment
+
+For simple pipelines, you can skip the split and generate a complete plan in one phase. The enrichment pattern is most valuable when:
+- The input document is complex and needs LLM reasoning to identify what matters
+- You have many tracked items and need LLM to prioritize correctly
+- Different entities need different analysis focus areas
+
 ## Stage 2: Evidence Store
 
 **When**: After presearch/precompute, before dispatch.
