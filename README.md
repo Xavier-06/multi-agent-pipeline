@@ -1,16 +1,16 @@
 # Multi-Agent Pipeline Framework
 
-Production-grade multi-agent orchestration patterns, extracted from a battle-tested 33-phase BP investment research pipeline.
+Production-grade multi-agent orchestration patterns, generalized from a battle-tested 33-phase production pipeline into domain-agnostic building blocks.
 
 ## What This Is
 
-A **WorkBuddy skill** (not a standalone library) that teaches an AI agent how to design and build multi-step, multi-agent pipelines from scratch. Install it in WorkBuddy, ask "build me a competitive analysis pipeline" or "design a multi-agent workflow for literature review," and the skill provides the architectural blueprints.
+A **WorkBuddy skill** (not a standalone library) that teaches an AI agent how to design and build multi-step, multi-agent pipelines for any domain. Install it in WorkBuddy, ask "build me a competitive analysis pipeline" or "design a multi-agent workflow for literature review," and the skill provides the architectural blueprints.
 
 ## Architecture
 
 ```
 OrchestratorKernel          # Generic: runs phases, handles pause/resume, auto-backfill
-  ├── BPProfile             # 33-phase BP due diligence pipeline (production reference)
+  ├── ExampleProfile        # Reference implementation (e.g. due diligence, code review)
   └── YourNewProfile        # Your domain, same kernel
 ```
 
@@ -24,10 +24,10 @@ OrchestratorKernel          # Generic: runs phases, handles pause/resume, auto-b
 |---------|---------------|-----------|
 | **Three Pause Signals** | How phases communicate with the kernel | [kernel-pattern.md](references/kernel-pattern.md) |
 | **Wave-Based Sequential Dispatch** | Rate-limit-safe sub-agent spawning | [dispatch-protocol.md](references/dispatch-protocol.md) |
-| **Quality Production Chain** | 7-stage quality with 3 repair mechanisms | [quality-chain.md](references/quality-chain.md) |
+| **Quality Production Chain** | Multi-stage quality with repair mechanisms | [quality-chain.md](references/quality-chain.md) |
 | **Concurrency Safety** | File locks + atomic writes for shared state | [concurrency-safety.md](references/concurrency-safety.md) |
 | **Instruction Store** | Hot-loaded system prompts (edit without code changes) | [instruction-store.md](references/instruction-store.md) |
-| **Shared State** | Cross-wave information passing | [shared-state.md](references/shared-state.md) |
+| **Shared State** | Cross-wave context passing | [shared-state.md](references/shared-state.md) |
 | **Sub-Agent Capabilities** | Connector IDs + tool mapping + prompt assembly | [subagent-capabilities.md](references/subagent-capabilities.md) |
 
 ## Project Structure
@@ -43,7 +43,7 @@ multi-agent-pipeline/
     ├── quality-chain.md              # Quality chain + repair mechanisms + thresholds
     ├── concurrency-safety.md         # File lock + atomic write + JSON self-repair
     ├── instruction-store.md          # Hot-loaded prompt system
-    ├── shared-state.md               # Cross-wave information hub
+    ├── shared-state.md               # Cross-wave context passing (3-layer architecture)
     └── subagent-capabilities.md      # Sub-agent capability chain + tool mapping
 ```
 
@@ -70,11 +70,11 @@ multi-agent-pipeline/
 
 See [profile-template.md](references/profile-template.md) for the complete template. The short version:
 
-1. Define your waves (independent research dimensions)
+1. Define your waves (independent analysis dimensions)
 2. For each wave, define roles (one sub-agent per role)
 3. Create `instruction_store_{profile}/` with one `.md` per role
 4. Add `phase_prerequisites()` and `phase_outputs()` for dependency auto-backfill
-5. Add evidence gates after each wave, claim coverage after all waves
+5. Add quality gates after each wave, coverage check after all waves
 
 ## Design Principles
 
@@ -84,15 +84,13 @@ See [profile-template.md](references/profile-template.md) for the complete templ
 - **Prompts are files, not code** — edit `.md` files to change sub-agent behavior without touching runtime
 - **Dependency backfill is precise** — kernel knows which phase produces which file, backfills to the right one
 
-## Production Pipeline Stats
+## Production Reference
 
-| Pipeline | Phases | Waves | Roles | Quality Gates | Repair Types |
-|----------|--------|-------|-------|---------------|--------------|
-| BP Due Diligence | 33 | 4 | 8 + synthesis | 7 | 3 (wave gate, claim coverage, synthesis) |
+This skill was extracted from a 33-phase, 4-wave, 8-role production pipeline. All patterns have been battle-tested and generalized.
 
 ## Version
 
-**v2.1.0** — See [SKILL.md](SKILL.md) for full description and triggers.
+**v3.0.0** — All reference files rewritten as domain-agnostic patterns. See [SKILL.md](SKILL.md) for full description and triggers.
 
 ## License
 
