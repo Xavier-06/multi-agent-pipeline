@@ -1,6 +1,6 @@
 ---
 name: "multi-agent-pipeline"
-version: "3.0.0"
+version: "3.1.0"
 description: >
   Production-grade multi-agent pipeline orchestration framework.
   Patterns extracted from a battle-tested 33-phase production pipeline,
@@ -236,3 +236,7 @@ See [references/profile-template.md](references/profile-template.md) for a compl
 | [presearch-pattern.md](references/presearch-pattern.md) | Pre-dispatch intelligence gathering, evidence store seeding, cost control |
 | [brief-assembly.md](references/brief-assembly.md) | Assignment slice, search work order, file references, cross-wave passing |
 | [stage-classification.md](references/stage-classification.md) | Stage/weight tiers, gate relaxation, risk overrides, prompt blocks |
+| [synthesis-pattern.md](references/synthesis-pattern.md) | Synthesis as sub-agent dispatch, citation repair, brief construction |
+| [delivery-multi-format.md](references/delivery-multi-format.md) | Multi-format output (MD/DOCX/PDF), per-section exports, artifact registration, delivery gate |
+| [gap-detection.md](references/gap-detection.md) | Pre-dispatch and post-wave gap detection, coverage integration |
+| [entity-verification.md](references/entity-verification.md) | Pre-flight entity validation, data availability assessment, early-stop pattern |

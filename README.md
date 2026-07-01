@@ -29,6 +29,13 @@ OrchestratorKernel          # Generic: runs phases, handles pause/resume, auto-b
 | **Instruction Store** | Hot-loaded system prompts (edit without code changes) | [instruction-store.md](references/instruction-store.md) |
 | **Shared State** | Cross-wave context passing | [shared-state.md](references/shared-state.md) |
 | **Sub-Agent Capabilities** | Connector IDs + tool mapping + prompt assembly | [subagent-capabilities.md](references/subagent-capabilities.md) |
+| **Presearch** | Pre-dispatch intelligence gathering | [presearch-pattern.md](references/presearch-pattern.md) |
+| **Brief Assembly** | Assignment slice + search work order + file refs | [brief-assembly.md](references/brief-assembly.md) |
+| **Stage Classification** | Gate relaxation + risk overrides per tier | [stage-classification.md](references/stage-classification.md) |
+| **Synthesis** | Final report assembly via sub-agent dispatch | [synthesis-pattern.md](references/synthesis-pattern.md) |
+| **Delivery** | Multi-format output + artifact registration | [delivery-multi-format.md](references/delivery-multi-format.md) |
+| **Gap Detection** | Pre-dispatch + post-wave gap tracking | [gap-detection.md](references/gap-detection.md) |
+| **Entity Verification** | Pre-flight validation + early-stop pattern | [entity-verification.md](references/entity-verification.md) |
 
 ## Project Structure
 
@@ -40,11 +47,18 @@ multi-agent-pipeline/
     ├── kernel-pattern.md             # OrchestratorKernel implementation
     ├── dispatch-protocol.md          # Coordinator dispatch loop + 4-layer defense
     ├── profile-template.md           # Complete profile template with all patterns
-    ├── quality-chain.md              # Quality chain + repair mechanisms + thresholds
+    ├── quality-chain.md              # Quality chain + repair + plan enrichment
     ├── concurrency-safety.md         # File lock + atomic write + JSON self-repair
     ├── instruction-store.md          # Hot-loaded prompt system
     ├── shared-state.md               # Cross-wave context passing (3-layer architecture)
-    └── subagent-capabilities.md      # Sub-agent capability chain + tool mapping
+    ├── subagent-capabilities.md      # Sub-agent capability chain + tool mapping
+    ├── presearch-pattern.md          # Pre-dispatch intelligence gathering
+    ├── brief-assembly.md             # Assignment slice + search work order + file refs
+    ├── stage-classification.md       # Stage/weight tiers + gate relaxation + risk overrides
+    ├── synthesis-pattern.md          # Synthesis as sub-agent dispatch + citation repair
+    ├── delivery-multi-format.md      # Multi-format output + artifact registration
+    ├── gap-detection.md              # Pre-dispatch + post-wave gap tracking
+    └── entity-verification.md        # Pre-flight validation + early-stop pattern
 ```
 
 ## How It Works (30-Second Overview)
@@ -90,7 +104,7 @@ This skill was extracted from a 33-phase, 4-wave, 8-role production pipeline. Al
 
 ## Version
 
-**v3.0.0** — All reference files rewritten as domain-agnostic patterns. See [SKILL.md](SKILL.md) for full description and triggers.
+**v3.1.0** — 15 reference files covering the complete pipeline lifecycle: kernel, dispatch, quality, shared state, instruction store, concurrency, presearch, brief assembly, stage classification, synthesis, delivery, gap detection, entity verification. See [SKILL.md](SKILL.md) for full description and triggers.
 
 ## License
 
