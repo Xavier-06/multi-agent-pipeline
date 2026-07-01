@@ -26,140 +26,116 @@ def _outputs_dir(runtime_root: Path, job_ctx: JobContext) -> Path:
     return _task_dir(runtime_root, job_ctx)
 
 
-# ── Shared State (cross-wave information hub) ──────────────────
+# ── Shared State (cross-wave context passing) ─────────────────
 
 def _run_shared_state_init(runtime_root: Path, job_ctx: JobContext) -> dict:
-    """Initialize shared state — a cross-wave information hub that all sub-agents read.
+    """Initialize shared state before Wave 1.
 
-    Produces:
-    - shared_state.json: machine-readable current state
-    - shared_diligence_page.md: human/agent-readable summary
-    - open_questions.json: unresolved data gaps
-    - evidence_conflicts.json: counter-evidence queue
+    Builds a skeleton snapshot from your planning artifact.
+    Sub-agents in Wave 1+ read this to know what needs to be done.
+
+    Customize: replace 'your_plan.json' and state fields with your domain's concepts.
+    See shared-state.md for the three-layer architecture pattern.
     """
     task_dir = _task_dir(runtime_root, job_ctx)
-    # Read research plan + claim matrix
-    plan = json.loads((task_dir / "research_plan.json").read_text())
-    # Build initial shared state
+    plan = json.loads((task_dir / "your_plan.json").read_text())
+
+    # Build initial state — adapt fields to your domain
     state = {
         "schema_version": "shared_state.v1",
         "task_id": job_ctx.job_id,
         "entity": job_ctx.entity,
-        "claim_status": {
-            claim["claim_id"]: "planned"
-            for claim in plan.get("claim_matrix", [])
+        "item_status": {
+            item["id"]: "pending"
+            for item in plan.get("tracked_items", [])
         },
         "wave_progress": 0,
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     (task_dir / "shared_state.json").write_text(json.dumps(state, indent=2))
-    # Build human-readable diligence page
-    _write_diligence_page(task_dir, state, plan)
-    return {"ok": True, "mode": "shared_state_init", "result": {"claim_count": len(state["claim_status"])}}
+    (task_dir / "shared_state_page.md").write_text(_render_shared_page(state))
+    return {"ok": True, "mode": "shared_state_init"}
 
 
 def _run_shared_state_refresh(runtime_root: Path, job_ctx: JobContext, after_wave: int) -> dict:
-    """Refresh shared state after a wave completes.
+    """Rebuild shared state after a wave completes (always post-gate).
 
-    Sub-agents in Wave N+1 read the shared state to see what Wave N discovered.
-    This is the cross-wave information passing mechanism.
+    Scans ALL sub-agent outputs from completed waves, resolves statuses,
+    extracts open items. Wave N+1 sub-agents read this for context.
     """
     task_dir = _task_dir(runtime_root, job_ctx)
-    # Re-read all sub-agent outputs from completed waves
-    # Update claim_status: planned → supported/partially_supported/contradicted/not_addressed
-    # Update open_questions with new data gaps discovered
-    # Update evidence_conflicts with counter-evidence found
-    state = _rebuild_shared_state(task_dir, after_wave)
+    state = _rebuild_shared_state(task_dir, after_wave)  # YOUR IMPLEMENTATION
     (task_dir / "shared_state.json").write_text(json.dumps(state, indent=2))
-    # Rebuild diligence page with latest info
-    plan = json.loads((task_dir / "research_plan.json").read_text())
-    _write_diligence_page(task_dir, state, plan)
+    (task_dir / "shared_state_page.md").write_text(_render_shared_page(state))
     return {
         "ok": True, "mode": "shared_state_refresh",
-        "result": {"after_wave": after_wave, "claim_count": len(state["claim_status"])},
+        "result": {"after_wave": after_wave},
     }
 
 
-# ── Research Plan (LLM enrichment pattern) ─────────────────────
+# ── Planning Phase (script skeleton → LLM enrichment → collect) ───
 
-def _run_research_plan(runtime_root: Path, job_ctx: JobContext) -> dict:
+def _run_plan(runtime_root: Path, job_ctx: JobContext) -> dict:
     """Script generates skeleton → LLM enriches → collect merges.
 
     This is a SPLIT phase:
-    1. Script generates deterministic skeleton (questions + claims + fact_keys)
+    1. Script generates deterministic structure
     2. Returns needs_dispatch → Coordinator calls LLM to enrich
     3. Coordinator resumes with start_phase=collect to merge enrichment
+
+    Customize: the plan schema is entirely domain-specific.
     """
     task_dir = _task_dir(runtime_root, job_ctx)
 
-    # Step 1: Generate skeleton
     plan = {
         "plan_status": "skeleton",
         "entity": job_ctx.entity,
-        "core_questions": [
-            {"id": "Q1", "question": "...", "owner_section": "step_A", "priority": "high"},
+        "tracked_items": [                  # ← your domain's "what needs investigating"
+            {"id": "I001", "item": "...", "owner": "role_A", "priority": "high"},
         ],
-        "strategic_questions": [],          # ← LLM will fill
-        "claim_matrix": [
-            {
-                "claim_id": "C001",
-                "claim": "...",
-                "owner_section": "step_A",
-                "priority": "high",
-                "required_fact_keys": ["market_size", "growth_rate"],
-            },
-        ],
+        "enriched_fields": [],             # ← LLM will fill
     }
-    (task_dir / "research_plan.json").write_text(json.dumps(plan, indent=2))
+    (task_dir / "your_plan.json").write_text(json.dumps(plan, indent=2))
 
-    # Step 2: Return needs_dispatch — Coordinator enriches via LLM
-    instruction_path = runtime_root / "instruction_store_{profile}" / "research_plan_enrichment.md"
+    instruction_path = runtime_root / "instruction_store_yourprofile" / "plan_enrichment.md"
     return {
         "ok": True,
         "needs_dispatch": True,
         "has_more": False,
-        "mode": "research_plan",
-        "dispatch_info": {},
-        "instruction": f"Read {instruction_path}, the plan skeleton, and the input document. "
-                       f"Output enrichment JSON with: strategic_questions, claim_priority_deltas, "
-                       f"additional_claims, excluded_fact_keys. "
-                       f"Then resume with start_phase='research_plan_collect'.",
+        "mode": "plan",
+        "instruction": f"Read {instruction_path}, the plan skeleton, and the input. "
+                       f"Output enrichment JSON. Resume with start_phase='plan_collect'.",
     }
 
 
-def _run_research_plan_collect(runtime_root: Path, job_ctx: JobContext) -> dict:
+def _run_plan_collect(runtime_root: Path, job_ctx: JobContext) -> dict:
     """Merge LLM enrichment into the skeleton plan."""
     task_dir = _task_dir(runtime_root, job_ctx)
-    plan = json.loads((task_dir / "research_plan.json").read_text())
+    plan = json.loads((task_dir / "your_plan.json").read_text())
     enrichment_path = task_dir / "enrichment_delta.json"
     if enrichment_path.exists():
         delta = json.loads(enrichment_path.read_text())
-        plan["strategic_questions"] = delta.get("strategic_questions", [])
-        # Apply priority deltas
-        for d in delta.get("claim_priority_deltas", []):
-            for claim in plan["claim_matrix"]:
-                if claim["claim_id"] == d["claim_id"]:
-                    claim["priority"] = d["new_priority"]
-        # Add new claims
-        plan["claim_matrix"].extend(delta.get("additional_claims", []))
+        # Apply enrichment — adapt to your schema
+        plan["enriched_fields"] = delta.get("enriched_fields", [])
         plan["plan_status"] = "ready"
-        (task_dir / "research_plan.json").write_text(json.dumps(plan, indent=2))
-    return {"ok": True, "mode": "research_plan_collect", "result": {"plan_status": plan["plan_status"]}}
+        (task_dir / "your_plan.json").write_text(json.dumps(plan, indent=2))
+    return {"ok": True, "mode": "plan_collect", "result": {"plan_status": plan["plan_status"]}}
 
 
 # ── Wave Dispatch (prepare + collect split) ────────────────────
 
-# Define your waves
+# Define your waves — group roles by dependency
 WAVES = [
-    {"name": "Wave 1", "roles": ["step_A", "step_B", "step_C", "step_D"], "depends_on": []},
-    {"name": "Wave 2", "roles": ["step_E", "step_F"], "depends_on": ["Wave 1"]},
-    {"name": "Wave 3", "roles": ["step_G"], "depends_on": ["Wave 1", "Wave 2"]},
+    {"name": "Wave 1", "roles": ["role_A", "role_B", "role_C"], "depends_on": []},
+    {"name": "Wave 2", "roles": ["role_D", "role_E"], "depends_on": ["Wave 1"]},
+    {"name": "Wave 3", "roles": ["role_F"], "depends_on": ["Wave 1", "Wave 2"]},
 ]
 
 def _run_dispatch_prepare(runtime_root: Path, job_ctx: JobContext, wave_index: int) -> dict:
     """Write manifest for ONE role in the current wave (sequential mode).
 
     Sequential: each call dispatches exactly one role. has_more signals if more remain.
+    This prevents concurrent writes to shared files.
     """
     task_dir = _task_dir(runtime_root, job_ctx)
     wave = WAVES[wave_index]
@@ -168,32 +144,28 @@ def _run_dispatch_prepare(runtime_root: Path, job_ctx: JobContext, wave_index: i
     # Find the first incomplete role
     for role_slug in roles:
         if not _role_outputs_complete(task_dir, role_slug):
-            # Build manifest for this ONE role
             manifest = _build_manifest(runtime_root, job_ctx, role_slug, wave)
             manifest_path = task_dir / f"manifest_{role_slug}.json"
             manifest_path.write_text(json.dumps(manifest, indent=2))
 
-            remaining_roles = [r for r in roles if r != role_slug and not _role_outputs_complete(task_dir, r)]
-            has_more = len(remaining_roles) > 0
+            remaining = [r for r in roles if r != role_slug and not _role_outputs_complete(task_dir, r)]
+            has_more = len(remaining) > 0
 
             return {
                 "ok": True,
                 "needs_dispatch": True,
-                "has_more": has_more,           # ← KEY: drives sequential loop
+                "has_more": has_more,           # ← drives sequential loop
                 "mode": "dispatch_prepare",
                 "dispatch_info": {
                     "manifests": [str(manifest_path)],   # ONE manifest
-                    "remaining_manifests": [],
                     "roles": [role_slug],
-                    "task_dir": str(task_dir),
                     "wave": wave_index + 1,
                 },
                 "instruction": f"MANDATORY: Read manifest at {manifest_path}. Use Agent tool with "
-                               f"system_prompt from manifest. Do NOT summarize. "
-                               f"{'Do NOT spawn multiple sub-agents.' if has_more else ''}",
+                               f"system_prompt from manifest. Do NOT spawn multiple sub-agents."
+                               + (" Resume with same phase to dispatch next role." if has_more else ""),
             }
 
-    # All roles complete
     return {"ok": True, "mode": "dispatch_prepare", "result": {"all_roles_complete": True}}
 
 
@@ -207,46 +179,37 @@ def _run_dispatch_collect(runtime_root: Path, job_ctx: JobContext, wave_index: i
     """
     task_dir = _task_dir(runtime_root, job_ctx)
     wave = WAVES[wave_index]
-    completed = []
-    incomplete = []
-
-    for role_slug in wave["roles"]:
-        if _role_outputs_complete(task_dir, role_slug):
-            completed.append(role_slug)
-        else:
-            incomplete.append(role_slug)
+    incomplete = [r for r in wave["roles"] if not _role_outputs_complete(task_dir, r)]
 
     if incomplete:
-        # Layer 4: Re-dispatch incomplete roles
-        # (same prepare pattern, but with retry counter)
         return {
-            "ok": True,
-            "needs_dispatch": True,
-            "has_more": False,
+            "ok": True, "needs_dispatch": True, "has_more": False,
             "mode": "dispatch_collect",
             "dispatch_info": {"incomplete_roles": incomplete},
             "instruction": f"Re-dispatch roles: {incomplete}",
         }
 
-    return {
-        "ok": True,
-        "mode": "dispatch_collect",
-        "result": {"completed": len(completed), "wave": wave_index + 1},
-    }
+    completed = [r for r in wave["roles"] if _role_outputs_complete(task_dir, r)]
+    return {"ok": True, "mode": "dispatch_collect",
+            "result": {"completed": len(completed), "wave": wave_index + 1}}
 
 
 def _role_outputs_complete(task_dir: Path, role_slug: str) -> bool:
-    """Check if a role has produced all 3 required files."""
+    """Check if a role has produced all required files.
+
+    Customize the file list for your domain. The 3-file pattern
+    (report.md + data sidecar + metadata sidecar) is a common default.
+    """
     outputs_dir = task_dir / "outputs"
-    md_path = outputs_dir / f"phase2_{role_slug}.md"
-    facts_path = outputs_dir / f"phase2_{role_slug}-facts.json"
-    section_path = outputs_dir / f"phase2_{role_slug}-section.json"
+    md_path = outputs_dir / f"{role_slug}.md"
+    data_path = outputs_dir / f"{role_slug}-data.json"
+    meta_path = outputs_dir / f"{role_slug}-meta.json"
 
     if not md_path.exists() or md_path.stat().st_size < 100:
         return False
-    if not facts_path.exists() or not _json_valid(facts_path):
+    if not data_path.exists() or not _json_valid(data_path):
         return False
-    if not section_path.exists() or not _json_valid(section_path):
+    if not meta_path.exists() or not _json_valid(meta_path):
         return False
     return True
 
@@ -261,18 +224,20 @@ def _json_valid(path: Path) -> bool:
         return False
 
 
-# ── Evidence Gate (with repair) ────────────────────────────────
+# ── Quality Gate (with repair) ─────────────────────────────────
 
-_MAX_BLOCKING_RETRIES = 1
+_MAX_REPAIR_RETRIES = 1
 
-def _run_evidence_gate(runtime_root: Path, job_ctx: JobContext, wave: int) -> dict:
-    """Gate: check if sub-agent claims are supported by facts.
+def _run_quality_gate(runtime_root: Path, job_ctx: JobContext, wave: int) -> dict:
+    """Gate: check if sub-agent outputs meet quality criteria.
 
-    On FAIL: generate repair manifests → dispatch repair sub-agents → re-run gate.
-    After max retries: degrade blocking claims to WARN and continue.
+    On FAIL: generate repair manifests → dispatch repair sub-agents → re-run.
+    After max retries: degrade to WARN and continue.
+
+    Customize: the gate evaluation logic is entirely domain-specific.
     """
     task_dir = _task_dir(runtime_root, job_ctx)
-    gate_result = _evaluate_evidence_gate(task_dir, wave)
+    gate_result = _evaluate_quality_gate(task_dir, wave)  # YOUR IMPLEMENTATION
 
     if gate_result.get("needs_repair"):
         repair_manifests = _build_repair_manifests(task_dir, wave, gate_result)
@@ -284,17 +249,17 @@ def _run_evidence_gate(runtime_root: Path, job_ctx: JobContext, wave: int) -> di
                 "ok": True,
                 "needs_dispatch": True,
                 "has_more": has_more,
-                "mode": "evidence_gate_repair",
+                "mode": "quality_gate_repair",
                 "dispatch_info": {
                     "manifests": [first],
                     "remaining_manifests": remaining,
                     "wave": wave,
                     "is_repair": True,
                 },
-                "instruction": f"Dispatch repair sub-agent. Sequential only.",
+                "instruction": "Dispatch repair sub-agent. Sequential only.",
             }
 
-    return {"ok": gate_result.get("ok", True), "mode": "evidence_gate", "result": gate_result}
+    return {"ok": gate_result.get("ok", True), "mode": "quality_gate", "result": gate_result}
 
 
 # ── Instruction Store (hot-loaded system prompts) ──────────────
@@ -303,36 +268,24 @@ def _build_manifest(runtime_root: Path, job_ctx: JobContext, role_slug: str, wav
     """Build sub-agent manifest with system_prompt from instruction store."""
 
     # HOT LOAD: system prompt from file, not hardcoded
-    instruction_store = runtime_root / "instruction_store_{profile}"
+    instruction_store = runtime_root / "instruction_store_yourprofile"
     prompt_path = instruction_store / f"{role_slug}.md"
-    if prompt_path.exists():
-        system_prompt = prompt_path.read_text(encoding="utf-8")
-    else:
-        system_prompt = f"ERROR: prompt not found at {prompt_path}"
+    system_prompt = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else f"ERROR: prompt not found"
 
     # Template variable substitution
     system_prompt = system_prompt.replace("{TASK_ID}", job_ctx.job_id)
     system_prompt = system_prompt.replace("{ENTITY}", job_ctx.entity)
 
-    # Generate brief (structured input document)
     brief_path = _build_brief(runtime_root, job_ctx, role_slug, wave)
 
     return {
         "manifest_version": "1.0",
         "task_id": job_ctx.job_id,
         "role": role_slug,
-        "slug": role_slug,
-        "label": f"{job_ctx.job_id}-{role_slug}",
         "system_prompt": system_prompt,
         "brief_path": str(brief_path),
-        "brief_content_preview": brief_path.read_text()[:2000],
-        "output_path": str(_outputs_dir(runtime_root, job_ctx) / f"phase2_{role_slug}.md"),
+        "output_path": str(_outputs_dir(runtime_root, job_ctx) / f"{role_slug}.md"),
         "timeout": 900,
-        "thinking": "high",
-        "dispatch_mode": "team_async",
-        "mode": "bypassPermissions",
-        "subagent_type": "general-purpose",
-        "team_name_template": f"{runtime_root.name}-{{task_id}}",
         "connectorIds": [],    # Fill with your MCP connector IDs
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "status": "pending",
@@ -340,7 +293,13 @@ def _build_manifest(runtime_root: Path, job_ctx: JobContext, role_slug: str, wav
 
 
 def _build_brief(runtime_root: Path, job_ctx: JobContext, role_slug: str, wave: dict) -> Path:
-    """Generate a structured brief for the sub-agent."""
+    """Generate a structured brief for the sub-agent.
+
+    The brief lists input files the sub-agent should read, including:
+    - Planning artifact
+    - Shared state (progress snapshot)
+    - Prior wave outputs (Layer 3 cross-wave context)
+    """
     task_dir = _task_dir(runtime_root, job_ctx)
     brief_path = task_dir / f"brief_{role_slug}.md"
     lines = [
@@ -349,33 +308,62 @@ def _build_brief(runtime_root: Path, job_ctx: JobContext, role_slug: str, wave: 
         f"**Task ID:** {job_ctx.job_id}",
         f"**Entity:** {job_ctx.entity}",
         f"",
-        f"## Input Files",
-        f"- Research Plan: `{task_dir / 'research_plan.json'}`",
-        f"- Fact Store: `{task_dir / 'fact_store.json'}`",
-        f"- Shared State: `{task_dir / 'shared_state.json'}`",
+        f"## Input Files (read in order)",
+        f"- Shared State Page: `{task_dir / 'shared_state_page.md'}` ← read FIRST",
+        f"- Shared State JSON: `{task_dir / 'shared_state.json'}`",
+        f"- Plan: `{task_dir / 'your_plan.json'}`",
     ]
-    # Include prior wave outputs for dependency chains
+    # Include prior wave outputs for dependency chains (Layer 3)
     if wave["depends_on"]:
         lines.append(f"", f"## Prior Wave Outputs")
         for dep_wave_name in wave["depends_on"]:
             dep_wave = next(w for w in WAVES if w["name"] == dep_wave_name)
             for dep_role in dep_wave["roles"]:
-                dep_path = _outputs_dir(runtime_root, job_ctx) / f"phase2_{dep_role}.md"
+                dep_path = _outputs_dir(runtime_root, job_ctx) / f"{dep_role}.md"
                 if dep_path.exists():
                     lines.append(f"- {dep_role}: `{dep_path}`")
     lines.extend([
         f"",
-        f"## Output File",
-        f"Write to: `{_outputs_dir(runtime_root, job_ctx) / f'phase2_{role_slug}.md'}`",
-        f"",
-        f"## Output Requirements",
+        f"## Output Files",
         f"Your output MUST include 3 files:",
-        f"1. `phase2_{role_slug}.md` — Main analysis with Section Package",
-        f"2. `phase2_{role_slug}-facts.json` — Discovered facts",
-        f"3. `phase2_{role_slug}-section.json` — Structured section package",
+        f"1. `{role_slug}.md` — Main analysis",
+        f"2. `{role_slug}-data.json` — Structured data sidecar",
+        f"3. `{role_slug}-meta.json` — Metadata sidecar",
+        f"",
+        f"Write to: `{_outputs_dir(runtime_root, job_ctx)}`",
     ])
     brief_path.write_text("\n".join(lines) + "\n")
     return brief_path
+
+
+# ── Sidecar Merge (centralized evidence store) ─────────────────
+
+def _run_sidecar_merge(runtime_root: Path, job_ctx: JobContext) -> dict:
+    """Merge all data sidecars into one centralized store.
+
+    See shared-state.md Layer 2 for the pattern.
+    Malformed sidecars are skipped, not blocking.
+    """
+    outputs_dir = _outputs_dir(runtime_root, job_ctx)
+    task_dir = _task_dir(runtime_root, job_ctx)
+
+    items = []
+    seen_ids = set()
+    malformed = []
+    for path in outputs_dir.glob("*-data.json"):
+        try:
+            data = json.loads(path.read_text())
+            for item in data.get("items", []):
+                if item.get("id") and item["id"] not in seen_ids:
+                    seen_ids.add(item["id"])
+                    items.append(item)
+        except (json.JSONDecodeError, KeyError):
+            malformed.append(str(path))
+
+    store_path = task_dir / "evidence_store.json"
+    store_path.write_text(json.dumps({"items": items, "malformed": malformed}, indent=2))
+    return {"ok": True, "mode": "sidecar_merge",
+            "result": {"total_items": len(items), "malformed": len(malformed)}}
 
 
 # ── Profile class ──────────────────────────────────────────────
@@ -390,57 +378,46 @@ class MyNewProfile(PipelineProfile):
                 "phase01_intake":             lambda ctx: _run_intake(runtime_root, ctx),
                 # Phase 02: Entity verify
                 "phase02_entity_verify":      lambda ctx: _run_entity_verify(runtime_root, ctx),
-                # Phase 03: Research plan (split: skeleton → LLM enrich → collect)
-                "phase03_research_plan":      lambda ctx: _run_research_plan(runtime_root, ctx),
-                "phase03_research_plan_collect": lambda ctx: _run_research_plan_collect(runtime_root, ctx),
-                # Phase 04: Presearch
+                # Phase 03: Plan (split: skeleton → LLM enrich → collect)
+                "phase03_plan":               lambda ctx: _run_plan(runtime_root, ctx),
+                "phase03_plan_collect":       lambda ctx: _run_plan_collect(runtime_root, ctx),
+                # Phase 04: Presearch / precompute
                 "phase04_presearch":          lambda ctx: _run_presearch(runtime_root, ctx),
-                # Phase 05: Shared state init
+                # Phase 05: Shared state init (before Wave 1)
                 "phase05_shared_state_init":  lambda ctx: _run_shared_state_init(runtime_root, ctx),
-                # Phase 06-07: Fact store
-                "phase06_fact_store":         lambda ctx: _run_fact_store(runtime_root, ctx),
-                # ── Wave 1: Foundation (4 roles, sequential) ──
-                "phase08_dispatch_prepare":   lambda ctx: _run_dispatch_prepare(runtime_root, ctx, wave_index=0),
-                "phase09_dispatch_collect":   lambda ctx: _run_dispatch_collect(runtime_root, ctx, wave_index=0),
-                "phase10_wave1_evidence_gate": lambda ctx: _run_evidence_gate(runtime_root, ctx, wave=1),
-                "phase11_fact_store_merge":   lambda ctx: _run_fact_store_merge(runtime_root, ctx),
-                "phase12_shared_state_refresh": lambda ctx: _run_shared_state_refresh(runtime_root, ctx, after_wave=1),
-                # ── Wave 2: Deep analysis ──
-                "phase13_wave2_prepare":      lambda ctx: _run_dispatch_prepare(runtime_root, ctx, wave_index=1),
-                "phase14_wave2_collect":      lambda ctx: _run_dispatch_collect(runtime_root, ctx, wave_index=1),
-                "phase15_wave2_evidence_gate": lambda ctx: _run_evidence_gate(runtime_root, ctx, wave=2),
-                "phase16_shared_state_refresh": lambda ctx: _run_shared_state_refresh(runtime_root, ctx, after_wave=2),
-                # ── Wave 3: Synthesis ──
-                "phase17_wave3_prepare":      lambda ctx: _run_dispatch_prepare(runtime_root, ctx, wave_index=2),
-                "phase18_wave3_collect":      lambda ctx: _run_dispatch_collect(runtime_root, ctx, wave_index=2),
-                # ── Quality chain ──
-                "phase19_claim_coverage":     lambda ctx: _run_claim_coverage(runtime_root, ctx),
-                "phase20_section_package":    lambda ctx: _run_section_package_validation(runtime_root, ctx),
-                "phase21_synthesis_prepare":  lambda ctx: _run_synthesis_prepare(runtime_root, ctx),
-                "phase22_synthesis_collect":  lambda ctx: _run_synthesis_collect(runtime_root, ctx),
-                # ── Delivery ──
-                "phase23_debate_review":      lambda ctx: _run_debate_review(runtime_root, ctx),
-                "phase24_final_assembly":     lambda ctx: _run_final_assembly(runtime_root, ctx),
-                "phase25_delivery":           lambda ctx: _run_delivery(runtime_root, ctx),
+                # ── Wave 1 ──
+                "phase06_dispatch_prepare":   lambda ctx: _run_dispatch_prepare(runtime_root, ctx, wave_index=0),
+                "phase07_dispatch_collect":   lambda ctx: _run_dispatch_collect(runtime_root, ctx, wave_index=0),
+                "phase08_wave1_quality_gate": lambda ctx: _run_quality_gate(runtime_root, ctx, wave=1),
+                "phase09_sidecar_merge":      lambda ctx: _run_sidecar_merge(runtime_root, ctx),
+                "phase10_shared_state_refresh": lambda ctx: _run_shared_state_refresh(runtime_root, ctx, after_wave=1),
+                # ── Wave 2 ──
+                "phase11_wave2_prepare":      lambda ctx: _run_dispatch_prepare(runtime_root, ctx, wave_index=1),
+                "phase12_wave2_collect":      lambda ctx: _run_dispatch_collect(runtime_root, ctx, wave_index=1),
+                "phase13_wave2_quality_gate": lambda ctx: _run_quality_gate(runtime_root, ctx, wave=2),
+                "phase14_shared_state_refresh": lambda ctx: _run_shared_state_refresh(runtime_root, ctx, after_wave=2),
+                # ── Wave 3 ──
+                "phase15_wave3_prepare":      lambda ctx: _run_dispatch_prepare(runtime_root, ctx, wave_index=2),
+                "phase16_wave3_collect":      lambda ctx: _run_dispatch_collect(runtime_root, ctx, wave_index=2),
+                # ── Quality chain + delivery ──
+                "phase17_final_assembly":     lambda ctx: _run_final_assembly(runtime_root, ctx),
+                "phase18_delivery":           lambda ctx: _run_delivery(runtime_root, ctx),
             },
         )
         self.runtime_root = runtime_root
 
     def phase_prerequisites(self) -> dict[str, list[str]]:
         return {
-            "phase06_fact_store": ["research_plan.json"],
-            "phase08_dispatch_prepare": ["research_plan.json", "fact_store.json"],
-            "phase11_fact_store_merge": ["research_plan.json"],
-            "phase19_claim_coverage": ["research_plan.json"],
-            "phase23_debate_review": ["research_plan.json"],
+            "phase06_dispatch_prepare": ["your_plan.json"],
+            "phase09_sidecar_merge": ["your_plan.json"],
         }
 
     def phase_outputs(self) -> dict[str, list[str]]:
         return {
-            "phase03_research_plan": ["research_plan.json"],
+            "phase03_plan": ["your_plan.json"],
             "phase04_presearch": ["presearch_results.json"],
-            "phase06_fact_store": ["fact_store.json"],
-            "phase05_shared_state_init": ["shared_state.json"],
+            "phase05_shared_state_init": ["shared_state.json", "shared_state_page.md"],
+            "phase09_sidecar_merge": ["evidence_store.json"],
         }
 ```
 
@@ -450,21 +427,20 @@ Use descriptive names with wave numbers for clarity:
 
 | Pattern | Example | Purpose |
 |---------|---------|---------|
-| `phaseNN_*` | `phase01_intake`, `phase03_research_plan` | Pre-dispatch phases |
-| `phaseNN_waveN_*` | `phase10_wave1_evidence_gate` | Wave-specific gates |
-| `phaseNN_shared_state_*` | `phase12_shared_state_refresh` | Cross-wave state updates |
-| `phaseNN_dispatch_*` | `phase08_dispatch_prepare`, `phase09_dispatch_collect` | Prepare/collect pairs |
-| `phaseNN_*_repair` | `phase24_claim_coverage` (with repair mode) | Gate phases with repair |
+| `phaseNN_*` | `phase01_intake`, `phase03_plan` | Pre-dispatch phases |
+| `phaseNN_waveN_*` | `phase08_wave1_quality_gate` | Wave-specific gates |
+| `phaseNN_shared_state_*` | `phase10_shared_state_refresh` | Cross-wave context updates |
+| `phaseNN_dispatch_*` | `phase06_dispatch_prepare`, `phase07_dispatch_collect` | Prepare/collect pairs |
 
 ## Key Design Decisions
 
 When creating a new profile, decide:
 
-1. **How many waves?** → Independent research dimensions = more waves
+1. **How many waves?** → Independent dimensions = more waves
 2. **Roles per wave?** → Each role = one sub-agent responsibility
-3. **Shared state refresh?** → After which waves? (recommended: after every wave with >2 roles)
-4. **Evidence gate per wave?** → Yes for every wave that produces claims
+3. **Shared state refresh?** → After which waves? (recommended: after waves with 3+ roles)
+4. **Quality gate per wave?** → Yes for every wave that produces verifiable output
 5. **Repair strategy?** → Max retries + degradation policy per gate type
-6. **Footnote/citation density?** → Configure threshold based on domain needs
-7. **Stage tier degradation?** → Early-stage projects get lighter gates
+6. **Output file convention?** → 3-file pattern (report + data sidecar + meta sidecar) or simpler
+7. **Stage-aware behavior?** → Early-stage projects get lighter gates
 8. **Instruction store location?** → `instruction_store_{profile}/` directory with one `.md` per role
