@@ -103,6 +103,50 @@ refresh phase:  shared_state_refresh
 ...
 ```
 
+### Fuzzy Matching for Cross-Wave Item Resolution
+
+When Wave 1 sub-agents tag their outputs with item keys (e.g., `sub_topic`), the keys may not exactly match the plan's item names. The refresh phase must handle this:
+
+```python
+def resolve_item_key(agent_output_key: str, plan_items: list[str]) -> str | None:
+    """Match agent output to plan item with fuzzy fallback.
+
+    Priority:
+    1. Exact match (case-insensitive)
+    2. Substring match (plan item contained in agent key or vice versa)
+    3. Keyword overlap (tokenize both, check ≥50% keyword overlap)
+    4. None (unmatched — record as "general" bucket)
+    """
+    key_lower = agent_output_key.lower().strip()
+
+    # Exact match
+    for item in plan_items:
+        if key_lower == item.lower():
+            return item
+
+    # Substring match
+    for item in plan_items:
+        if item.lower() in key_lower or key_lower in item.lower():
+            return item
+
+    # Keyword overlap
+    key_tokens = set(key_lower.replace("-", " ").replace("_", " ").split())
+    key_tokens = {t for t in key_tokens if len(t) >= 2}
+    best_match, best_ratio = None, 0
+    for item in plan_items:
+        item_tokens = set(item.lower().replace("-", " ").replace("_", " ").split())
+        item_tokens = {t for t in item_tokens if len(t) >= 2}
+        if not item_tokens:
+            continue
+        overlap = len(key_tokens & item_tokens) / max(len(item_tokens), 1)
+        if overlap > best_ratio and overlap >= 0.5:
+            best_match, best_ratio = item, overlap
+
+    return best_match  # May be None — unmatched items go to "general"
+```
+
+**Why this matters**: Academic search agents tag papers with `sub_topic` fields derived from search results. These may differ from the plan's canonical names (e.g., agent writes "solid state electrolyte materials" but plan says "硫化物固态电解质"). Without fuzzy matching, papers get orphaned into empty buckets and downstream phases see `total_docs=0` for items that actually have data.
+
 **Which waves need a refresh?**
 
 | Condition | Refresh? | Reason |

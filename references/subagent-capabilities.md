@@ -242,7 +242,53 @@ def check_role_quality(role_name, task_dir, output_path) -> dict:
     }
 ```
 
-## 6. Complete Capability Chain
+## 6. Graceful Degradation: When Optional Phases Fail
+
+Not every phase is critical. When a non-blocking phase fails or is skipped, downstream phases must degrade gracefully rather than crash.
+
+### Pattern: Check-and-Fallback in Manifest Builder
+
+When building a sub-agent's manifest, check if optional input files exist and adjust the prompt accordingly:
+
+```python
+def _build_manifest_for_writer(runtime_root, job_ctx):
+    task_dir = _task_dir(runtime_root, job_ctx)
+
+    # Check optional dependency
+    tech_assessment_path = task_dir / "tech_assessment.md"
+    has_tech_assessment = tech_assessment_path.exists() and tech_assessment_path.stat().st_size > 200
+
+    key_inputs = {
+        "reading_notes": "sub_topic_*_reading_notes.json",
+        "industry_facts": str(task_dir / "industry_scout-facts.json"),
+    }
+
+    if has_tech_assessment:
+        key_inputs["tech_assessment"] = str(tech_assessment_path)
+    else:
+        # Fallback: inject degradation instruction into prompt
+        system_prompt += (
+            "\n\n## ⚠️ FALLBACK MODE\n"
+            "tech_assessment.md is unavailable. Extract technical analysis directly from "
+            "reading_notes + facts files. Note in your report: 'Technical strategy analysis "
+            "derived from reading notes, without independent strategic review.'\n"
+        )
+
+    manifest["fallback_mode"] = not has_tech_assessment
+    manifest["key_inputs"] = key_inputs
+```
+
+### Severity Classification for Phase Dependencies
+
+| Dependency type | On missing | Action |
+|----------------|------------|--------|
+| **Required** (no data = no output) | BLOCKING | Pipeline stops, report error |
+| **Enriching** (better output if present) | Degrade to WARN | Downstream adjusts prompt, continues |
+| **Optional** (nice to have) | Skip silently | Downstream ignores missing file |
+
+**Rule**: Every phase handler that reads prior-phase outputs must classify each input as required/enriching/optional, and handle missing files accordingly. Never let a missing enriching input crash the pipeline.
+
+## 7. Complete Capability Chain
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐

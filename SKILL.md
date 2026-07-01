@@ -1,6 +1,6 @@
 ---
 name: "multi-agent-pipeline"
-version: "3.2.0"
+version: "4.0.0"
 description: >
   Production-grade multi-agent pipeline orchestration framework.
   Patterns extracted from a battle-tested 33-phase production pipeline,
@@ -16,12 +16,17 @@ description: >
   (8) Sub-agent capability mapping (connector IDs + tool guide + prompt assembly),
   (9) Per-section independent export for multi-artifact delivery,
   (10) Per-section quality aggregation with unified gate verdict,
-  (11) Required data keys auto-fill from section-to-keys mapping.
+  (11) Required data keys auto-fill from section-to-keys mapping,
+  (12) Per-item parallel dispatch for large datasets (split one role into N bounded agents),
+  (13) Output schema contract with tolerant field reading and type-resilient consumption,
+  (14) Graceful degradation when optional phases fail or are skipped.
   Triggers: "build a pipeline", "multi-agent workflow", "orchestration", "dispatch sub-agents",
   "wave dispatch", "quality production chain", "needs_dispatch pattern",
   "quality gate", "repair mechanism", "instruction store", "shared state",
   "sub-agent tools", "connector IDs", "tool mapping",
-  "per-section export", "data keys auto-fill", "quality aggregation".
+  "per-section export", "data keys auto-fill", "quality aggregation",
+  "per-item dispatch", "output schema contract", "graceful degradation",
+  "type-resilient consumption", "fallback mode".
   NOT for: simple single-agent tasks, one-shot generation, trivial Q&A.
 ---
 
@@ -68,6 +73,8 @@ Wave 3: role_F                    (depends on Wave 1+2)
 ```
 
 **Why sequential, not parallel**: Parallel dispatch causes API 429 rate limits AND shared file concurrent write conflicts. Sequential dispatch with `has_more` solves both.
+
+**Exception — per-item parallel dispatch**: When a single role processes a large dataset (e.g., reading 200+ papers across 7 sub-topics), split it into N sub-agents (one per item/sub-topic), dispatched sequentially via `has_more`. Each sub-agent handles a bounded slice, preventing context window overflow. The prepare phase iterates through items; the collect phase merges results. See [references/dispatch-protocol.md](references/dispatch-protocol.md) for the per-item dispatch pattern.
 
 **4-layer output collection defense**:
 1. **Soft constraint**: Dispatch instruction mandates 3-file output + sequential-only
@@ -264,12 +271,16 @@ See [references/profile-template.md](references/profile-template.md) for a compl
 
 - **Never use synchronous task()**: Always use `Agent(name=..., team_name=..., mode='bypassPermissions')`. Sync task returns code=10003.
 - **Always poll output files**: Don't rely on sub-agent messages. Check existence + JSON validity + file stability.
-- **Sequential mode is mandatory**: Parallel dispatch triggers API 429 rate limits AND file write conflicts.
+- **Sequential mode is mandatory**: Parallel dispatch triggers API 429 rate limits AND file write conflicts. Exception: per-item dispatch (see dispatch-protocol.md) uses sequential `has_more` to iterate items — still sequential, just split.
 - **Prompt must include tool restrictions**: Sub-agents don't have Glob/Grep. Tell them to use Bash + Read.
 - **Sub-agents must be self-closing**: If they find data gaps, they search themselves. Only return when output file is written.
 - **Never hardcode system prompts**: Use instruction store `.md` files. Hardcoded prompts are unmaintainable at scale.
 - **Always declare phase_prerequisites and phase_outputs**: Without them, dependency auto-backfill is blind.
 - **Shared state refresh after every significant wave**: Without it, Wave 2+ sub-agents work in isolation.
+- **Never use `llm_enrichment` dispatch type**: Plan generation and any LLM-reasoning phase must be dispatched as a sub-agent, not delegated to the Coordinator. Coordinator is orchestrator, not content generator.
+- **Downstream phases must be type-resilient**: Sub-agents are LLMs — they sometimes produce `list[dict]` where `list[str]` was specified. Every phase that reads another phase's output must check types and normalize.
+- **Declare canonical field names in prompts, tolerate variants in consumers**: Prompt says `quality_tier`, consumer also accepts `overall_grade`/`grade`. Both layers needed — prompt alone doesn't prevent drift.
+- **Classify phase dependencies**: Required (pipeline stops if missing) vs enriching (degrade gracefully) vs optional (skip silently). Never let a missing enriching input crash the pipeline.
 
 ## Reference Files
 

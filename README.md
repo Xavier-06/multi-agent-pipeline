@@ -24,7 +24,10 @@ OrchestratorKernel          # Generic: runs phases, handles pause/resume, auto-b
 |---------|---------------|-----------|
 | **Three Pause Signals** | How phases communicate with the kernel | [kernel-pattern.md](references/kernel-pattern.md) |
 | **Wave-Based Sequential Dispatch** | Rate-limit-safe sub-agent spawning | [dispatch-protocol.md](references/dispatch-protocol.md) |
+| **Per-Item Dispatch** | Split one role into N bounded agents for large datasets | [dispatch-protocol.md](references/dispatch-protocol.md#per-item-dispatch-when-one-role-needs-splitting) |
 | **Quality Production Chain** | Multi-stage quality with repair mechanisms | [quality-chain.md](references/quality-chain.md) |
+| **Output Schema Contract** | Canonical field names + tolerant consumption + type resilience | [quality-chain.md](references/quality-chain.md#output-schema-contract) |
+| **Graceful Degradation** | Required/enriching/optional dependency classification | [subagent-capabilities.md](references/subagent-capabilities.md#graceful-degradation-when-optional-phases-fail) |
 | **Concurrency Safety** | File locks + atomic writes for shared state | [concurrency-safety.md](references/concurrency-safety.md) |
 | **Instruction Store** | Hot-loaded system prompts (edit without code changes) | [instruction-store.md](references/instruction-store.md) |
 | **Shared State** | Cross-wave context passing | [shared-state.md](references/shared-state.md) |
@@ -96,9 +99,13 @@ See [profile-template.md](references/profile-template.md) for the complete templ
 
 - **Quality is built IN, not checked at the end** — each stage produces verifiable artifacts
 - **Gate failures trigger repair, not death** — targeted fixes with retry limits and graceful degradation
-- **Sequential dispatch, not parallel** — avoids API rate limits AND file write conflicts
+- **Sequential dispatch, not parallel** — avoids API rate limits AND file write conflicts (exception: per-item dispatch via `has_more`)
+- **Per-item dispatch for large datasets** — split one role into N bounded sub-agents, each handling a clean context slice
 - **Prompts are files, not code** — edit `.md` files to change sub-agent behavior without touching runtime
+- **Sub-agents do the thinking, not the Coordinator** — plan generation and LLM reasoning phases must be dispatched as sub-agents, never delegated to the Coordinator
+- **Type-resilient downstream consumption** — every phase that reads another phase's output must check types and normalize (sub-agents are LLMs, they drift)
 - **Dependency backfill is precise** — kernel knows which phase produces which file, backfills to the right one
+- **Classify phase dependencies** — Required (pipeline stops) vs Enriching (degrade gracefully) vs Optional (skip silently)
 
 ## Production Reference
 
@@ -106,7 +113,7 @@ This skill was extracted from a 33-phase, 4-wave, 8-role production pipeline. Al
 
 ## Version
 
-**v3.2.1** — 15 reference files covering the complete pipeline lifecycle: kernel, dispatch, quality, shared state, instruction store, concurrency, presearch, brief assembly, stage classification, synthesis, delivery, gap detection, entity verification. v3.2 added: per-section independent export, `required_data_keys` auto-fill, per-section quality aggregation, `_file_stable` dual implementation, complete 4-layer defense in profile template. See [SKILL.md](SKILL.md) for full description and triggers.
+**v4.0.0** — 15 reference files covering the complete pipeline lifecycle. v4.0 breaking changes: **Per-Item Dispatch** (split one role into N bounded agents for large datasets via sequential `has_more`), **Output Schema Contract** (canonical field names + tolerant consumption + type-resilient downstream parsing), **Anti-Pattern: Coordinator-Written Plan** (never use `llm_enrichment` — dispatch a sub-agent instead), **Graceful Degradation** (Required/Enriching/Optional dependency classification with check-and-fallback pattern), **Fuzzy Matching for Cross-Wave Resolution** (exact → substring → keyword overlap → general bucket), **Sub-Agent Plan Generation** (sub-agent with search tools produces informed plans, script skeletons replaced). See [SKILL.md](SKILL.md) for full description and triggers.
 
 ## License
 

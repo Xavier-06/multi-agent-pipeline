@@ -105,6 +105,88 @@ prepare(last call):
   → kernel: next_phase = collect phase (advance)
 ```
 
+## Per-Item Dispatch: When One Role Needs Splitting
+
+### Problem
+A single role may need to process a dataset too large for one sub-agent's context window. Example: deep_reader must read 284 papers across 7 sub-topics — even with batching, a single agent session accumulates ~80K tokens of notes + tool calls and blows up.
+
+### Solution: Split into N sub-agents, dispatched sequentially via `has_more`
+
+Instead of 1 agent processing all items, the prepare phase iterates through items (sub-topics, batches, etc.), dispatching one sub-agent per item:
+
+```
+prepare(first call):
+  finds item_0 not done → manifests = [{role: "deep_reader", slug: "deep_reader_sub1", ...}]
+  has_more = True  (items 1-6 still pending)
+
+prepare(second call):
+  item_0 done → manifests = [{role: "deep_reader", slug: "deep_reader_sub2", ...}]
+  has_more = True  (items 2-6 still pending)
+
+...
+
+prepare(last call):
+  items 0-5 done → manifests = [{role: "deep_reader", slug: "deep_reader_sub7", ...}]
+  has_more = True  (tech_strategist still pending)
+
+prepare(final call):
+  all deep_readers done → manifests = [{role: "tech_strategist", ...}]
+  has_more = False  → advance to collect phase
+```
+
+### Key design rules
+
+1. **Each sub-agent handles a bounded slice** — 1 sub-topic, 1 batch, 1 file set. Keep per-agent context under ~20K tokens of accumulated notes.
+2. **Unique slug per instance** — `deep_reader_sub1`, `deep_reader_sub2`, etc. The slug is used for team member naming and output file prefix.
+3. **Per-instance output files** — Each sub-agent writes to its own file: `sub_topic_1_reading_notes.json`, `sub_topic_2_reading_notes.json`, etc. Never share output files between instances.
+4. **Collect merges results** — After all instances complete, a merge phase (or the collect phase itself) aggregates individual outputs into the unified result that downstream phases expect.
+5. **has_more chains items + next role** — The prepare phase tracks both "are all items done?" and "is the next role done?" in a single loop.
+
+### Prepare phase template
+
+```python
+def _run_wave2_dispatch_prepare(runtime_root, job_ctx):
+    task = _task_dir(runtime_root, job_ctx)
+    items = load_items(task)  # e.g., reading_tasks from shared_state
+
+    # Find first incomplete item
+    for idx, item in enumerate(items):
+        output_file = task / f"item_{idx+1}_output.json"
+        if not _output_complete(output_file):
+            # Dispatch this item
+            manifest = build_item_manifest(item, idx, ...)
+            return {
+                "ok": True,
+                "needs_dispatch": True,
+                "dispatch_info": {
+                    "type": "per_item_dispatch",
+                    "manifests": [str(manifest_path)],
+                    "has_more": (idx < len(items) - 1) or next_role_pending,
+                    "current_item": idx + 1,
+                    "total_items": len(items),
+                },
+                "instruction": f"Dispatch sub-agent for item {idx+1}/{len(items)}...",
+                "next_phase": "phase_collect",
+            }
+
+    # All items done → dispatch next role or complete
+    if not next_role_done:
+        return build_next_role_manifest(...)
+
+    return {"ok": True, "needs_dispatch": True,
+            "dispatch_info": {"type": "complete", "manifests": [], "has_more": False}}
+```
+
+### When to use per-item dispatch
+
+| Condition | Use per-item? |
+|-----------|--------------|
+| Single role processes 50+ documents | **Yes** — split by document batch or sub-topic |
+| Single role processes 5-10 items | No — single agent is fine |
+| Context accumulation risk (>30K tokens of notes) | **Yes** — each sub-agent gets clean context |
+| Items are independent (no cross-item dependency) | **Yes** — this is the ideal case |
+| Items have ordering dependency | No — use sequential single agent |
+
 ### Role Completion Check
 
 ```python
